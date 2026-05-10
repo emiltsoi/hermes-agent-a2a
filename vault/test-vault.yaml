@@ -1,0 +1,13 @@
+# HermesA2A v2 — Test Vault
+# Isolated from production. Used by a2a-v2-test profile only.
+# Resolution: agent vault → explicit config → profile vault → env vars (wins)
+
+platforms:
+  telegram:
+    bot_token: "${A2A_TELEGRAM_BOT_TOKEN}"
+    default_chat_id: "${A2A_OWNER_CHAT_ID}"
+
+defaults:
+  platform: telegram
+  chat_type: dm
+  chat_id_resolver: default_chat_id

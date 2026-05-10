@@ -1,0 +1,10 @@
+# HermesA2A v2 -- Minimal Agent Config Template
+# Copy to profiles/<profile>/config.yaml and adjust.
+
+plugins:
+  enabled:
+    - hermes-a2a-v2
+
+a2a:
+  enabled: true
+  vault: auto  # resolves: agent vault -> profile vault -> env vars -> explicit config

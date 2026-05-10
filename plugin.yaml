@@ -1,0 +1,9 @@
+name: hermes-a2a-v2
+version: "0.1.0"
+description: |
+  A2A (Agent-to-Agent) protocol plugin for Hermes Agent v2.
+  Self-configuring: vault resolution chain, auto-source bootstrap,
+  multi-platform support (Telegram, Discord, Matrix). Fleet-agnostic.
+  Install: hermes plugin install https://github.com/<org>/hermes-a2a
+requires_env:
+  - A2A_V2_BOT_TOKEN
