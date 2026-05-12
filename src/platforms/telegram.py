@@ -33,5 +33,11 @@ class TelegramHandler:
         """Get bot info via /getMe."""
         url = f"https://api.telegram.org/bot{token}/getMe"
         req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read())
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            return {"ok": False, "error": body, "code": e.code}
+        except json.JSONDecodeError as e:
+            return {"ok": False, "error": f"JSONDecodeError: {e}"}

@@ -103,8 +103,17 @@ class VaultResolver:
         if not vault_path.exists():
             return None
         import yaml
-        with open(vault_path) as f:
-            raw = yaml.safe_load(f)
+        try:
+            with open(vault_path) as f:
+                raw = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise RuntimeError(
+                f"A2A vault error: failed to parse {vault_path} — malformed YAML: {e}"
+            ) from e
+        except OSError as e:
+            raise RuntimeError(
+                f"A2A vault error: failed to read {vault_path}: {e}"
+            ) from e
         if not raw:
             return None
         # Resolve ${ENV_VAR} interpolations in vault file values

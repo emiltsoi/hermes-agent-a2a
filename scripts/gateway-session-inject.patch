@@ -1,0 +1,15 @@
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -5341,6 +5341,12 @@ class Gateway:
+         if source.platform in {Platform.HOMEASSISTANT, Platform.WEBHOOK}:
+             return True
+
++        # Webhook-sourced sessions (even when target_session routes them to
++        # another platform like Telegram) are HMAC-authenticated — bypass the
++        # user allowlist regardless of effective platform.
++        if source.user_id and source.user_id.startswith("webhook:"):
++            return True
++
+         user_id = source.user_id
+         if not user_id:
+             return False

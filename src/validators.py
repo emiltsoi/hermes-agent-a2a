@@ -27,7 +27,7 @@ class BootValidator:
         if not token:
             raise RuntimeError(
                 "A2A identity error: no valid bot token found in fleet or agent vault. "
-                "Set A2A_V2_BOT_TOKEN env var or configure bot_token in vault.yaml."
+                "Set A2A_TELEGRAM_BOT_TOKEN env var or configure bot_token in vault.yaml."
             )
 
         if token.startswith("${") or "}" in token:
@@ -40,10 +40,23 @@ class BootValidator:
         telegram = identity.get("platforms", {}).get("telegram", {})
         chat_id = telegram.get("default_chat_id")
 
-        if not chat_id:
+        if not chat_id and chat_id != 0:
             raise RuntimeError(
                 "A2A identity error: no default_chat_id found. "
-                "Set A2A_V2_OWNER_CHAT_ID env var or configure default_chat_id in vault.yaml."
+                "Set A2A_OWNER_CHAT_ID env var or configure default_chat_id in vault.yaml."
+            )
+
+        # Validate chat_id is a non-zero integer or integer string
+        try:
+            parsed = int(chat_id)
+        except (ValueError, TypeError):
+            raise RuntimeError(
+                f"A2A identity error: default_chat_id must be a non-zero integer, "
+                f"got {repr(chat_id)}."
+            )
+        if parsed == 0:
+            raise RuntimeError(
+                f"A2A identity error: default_chat_id must be non-zero, got {repr(chat_id)}."
             )
 
     def validate_token_with_telegram(self, token: str) -> None:
@@ -65,4 +78,8 @@ class BootValidator:
                     f"A2A identity error: bot token rejected by Telegram API (401). "
                     f"Check that the bot token is correct and active."
                 )
-            raise
+            logger.warning(
+                f"[BootValidator] transient Telegram API error ({e.code}) during token "
+                f"verification — boot continues. This may indicate rate-limiting or an "
+                f"upstream outage. Token will be re-verified on next boot."
+            )

@@ -1,5 +1,8 @@
 """HermesA2A plugin entry point."""
 import logging
+from pathlib import Path
+from functools import lru_cache
+
 from .identity import VaultResolver
 from .bootstrap import AutoSourceBootstrap
 from .validators import BootValidator
@@ -7,9 +10,22 @@ from .validators import BootValidator
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=1)
+def _get_version() -> str:
+    """Read version from pyproject.toml, cached after first parse."""
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    import tomllib
+    with open(pyproject, "rb") as f:
+        data = tomllib.load(f)
+    return data["project"]["version"]
+
+
+__version__ = _get_version()
+
+
 class HermesA2AV2Plugin:
     name = "hermes-a2a-v2"
-    version = "0.1.0"
+    version = __version__
 
     def __init__(self, config: dict):
         self.config = config
@@ -21,8 +37,15 @@ class HermesA2AV2Plugin:
         """Run before the gateway starts accepting messages."""
         resolved_identity = self.vault_resolver.resolve()
         self.validator.validate(resolved_identity)
+        # Every boot: verify token with Telegram (fail-fast on revoked/rotated tokens)
+        token = (
+            resolved_identity.get("platforms", {})
+            .get("telegram", {})
+            .get("bot_token", "")
+        )
+        self.validator.validate_token_with_telegram(token)
         self.bootstrap.bootstrap_routes(self.config)
-        logger.info("[HermesA2A] boot complete -- identity resolved, routes bootstrapped")
+        logger.info("[HermesA2A] boot complete -- identity resolved, routes bootstrapped, token verified")
 
     def on_shutdown(self) -> None:
         """Run on gateway shutdown."""

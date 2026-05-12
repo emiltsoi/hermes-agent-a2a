@@ -25,11 +25,11 @@ class TestBootValidator:
 
     def test_valid_identity_passes_check_bot_token(self):
         validator = BootValidator(None)
-        identity = {"platforms": {"telegram": {"bot_token": "123456:ABC", "default_chat_id": "7945905361"}}}
+        identity = {"platforms": {"telegram": {"bot_token": "123456:ABC", "default_chat_id": "123456789"}}}
         validator._check_bot_token(identity)  # should not raise
         validator._check_chat_id(identity)  # should not raise
 
     def test_validate_calls_all_checks(self):
         validator = BootValidator(None)
-        identity = {"platforms": {"telegram": {"bot_token": "123456:ABC", "default_chat_id": "7945905361"}}}
+        identity = {"platforms": {"telegram": {"bot_token": "123456:ABC", "default_chat_id": "123456789"}}}
         validator.validate(identity)  # should not raise

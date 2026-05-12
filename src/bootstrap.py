@@ -54,7 +54,7 @@ class AutoSourceBootstrap:
             "user_id": telegram_cfg.get("default_chat_id"),
         }
 
-    def bootstrap_routes(self, config: dict) -> None:
+    def bootstrap_routes(self, config: dict, inbound_context: Optional[dict] = None) -> None:
         """Walk all webhook routes in config and fill in missing source blocks."""
         routes = (
             config.get("webhook", {})
@@ -63,6 +63,6 @@ class AutoSourceBootstrap:
         )
         for route_name, route_cfg in routes.items():
             if not route_cfg.get("source"):
-                bootstrapped = self.bootstrap_route(route_name, route_cfg)
+                bootstrapped = self.bootstrap_route(route_name, route_cfg, inbound_context=inbound_context)
                 route_cfg["source"] = bootstrapped
                 logger.info(f"[AutoSourceBootstrap] bootstrapped route {route_name}: {bootstrapped}")
