@@ -5,13 +5,6 @@ import threading
 from pathlib import Path
 from functools import lru_cache
 
-from .identity import VaultResolver
-from .bootstrap import AutoSourceBootstrap
-from .validators import BootValidator
-from . import server as a2a_server_module
-from . import hooks
-from . import tools as _tools
-
 logger = logging.getLogger(__name__)
 
 
@@ -30,58 +23,75 @@ def _get_version() -> str:
 
 __version__ = _get_version()
 
+# Module-level server state (survives plugin reloads)
+_server_started = False
+_server_instance = None
+_server_thread = None
+_init_lock = threading.Lock()
+
+
+def _ensure_a2a_server() -> None:
+    """Lazily start the A2A HTTP server. Thread-safe, idempotent."""
+    global _server_started, _server_instance, _server_thread
+    if _server_started:
+        return
+    with _init_lock:
+        if _server_started:
+            return
+        port = int(os.getenv("A2A_PORT", "8081"))
+        host = os.getenv("A2A_HOST", "127.0.0.1")
+        try:
+            # Import here to avoid issues during plugin discovery
+            import hermes_agent_a2a.src.server as a2a_server_module
+            _server_instance = a2a_server_module.A2AServer(host, port)
+            _server_thread = threading.Thread(
+                target=_server_instance.serve_forever,
+                name="a2a-server",
+                daemon=True,
+            )
+            _server_thread.start()
+            a2a_server_module.set_runtime_server(_server_instance, _server_thread)
+            _server_started = True
+            logger.info("[HermesA2A] A2A HTTP server started on %s:%s", host, port)
+        except Exception as exc:
+            logger.error("[HermesA2A] Failed to start A2A server: %s", exc)
+
+
+def _get_vault_resolver():
+    """Lazily create VaultResolver (requires config dict, not PluginContext)."""
+    import hermes_agent_a2a.src.identity as identity_module
+    from hermes_cli.config import load_config
+    cfg = load_config()
+    return identity_module.VaultResolver(cfg)
+
 
 class HermesA2AV3Plugin:
     name = "hermes-agent-a2a"
     version = "3.0.0"
 
-    def __init__(self, config: dict):
-        self.config = config
-        self.vault_resolver = VaultResolver(config)
-        self.bootstrap = AutoSourceBootstrap(config, self.vault_resolver)
-        self.validator = BootValidator(self.vault_resolver)
-        self._server = None
-        self._server_thread = None
-
     def register(self, registry) -> None:
-        """Register tools and hooks with the Hermes gateway registry."""
-        registry.hooks.register("pre_llm_call", hooks.pre_llm_call)
-        registry.hooks.register("post_llm_call", hooks.post_llm_call)
-        registry.hooks.register("pre_gateway_dispatch", hooks.pre_gateway_dispatch)
+        """Register tools and hooks. Server starts lazily on first tool call."""
+        import hermes_agent_a2a.src.hooks as hooks_module
+        import hermes_agent_a2a.src.tools as tools_module
+
+        registry.hooks.register("pre_llm_call", hooks_module.pre_llm_call)
+        registry.hooks.register("post_llm_call", hooks_module.post_llm_call)
+        registry.hooks.register("pre_gateway_dispatch", hooks_module.pre_gateway_dispatch)
         logger.info("[HermesA2A] Phase 2 hooks registered")
 
-        _tools.register(registry)
+        tools_module.register(registry, _ensure_a2a_server, _get_vault_resolver)
         logger.info("[HermesA2A] Phase 3 tools registered")
-
-    def on_boot(self) -> None:
-        """Start the A2A HTTP server before the gateway accepts messages."""
-        port = int(os.getenv("A2A_PORT", "8081"))
-        host = os.getenv("A2A_HOST", "127.0.0.1")
-
-        try:
-            self._server = a2a_server_module.A2AServer(host, port)
-            self._server_thread = threading.Thread(
-                target=self._server.serve_forever,
-                name="a2a-server",
-                daemon=True,
-            )
-            self._server_thread.start()
-            a2a_server_module.set_runtime_server(self._server, self._server_thread)
-            logger.info(
-                "[HermesA2A] A2A HTTP server started on %s:%s",
-                host,
-                port,
-            )
-        except Exception as exc:
-            logger.error("[HermesA2A] Failed to start A2A server: %s", exc)
 
     def on_shutdown(self) -> None:
         """Stop the A2A server gracefully."""
+        global _server_instance, _server_started
         logger.info("[HermesA2A] shutdown — stopping A2A server")
         try:
-            a2a_server_module.clear_runtime_server(self._server)
-            if self._server is not None:
-                self._server.shutdown()
+            if _server_instance is not None:
+                import hermes_agent_a2a.src.server as a2a_server_module
+                a2a_server_module.clear_runtime_server(_server_instance)
+                _server_instance.shutdown()
+                _server_started = False
         except Exception as exc:
             logger.debug("Error shutting down A2A server: %s", exc)
 
@@ -91,9 +101,10 @@ class HermesA2AV2Plugin(HermesA2AV3Plugin):
     pass
 
 
-def register(registry):
+def register(registry) -> None:
     """Entry point for hermes plugin system."""
-    return HermesA2AV3Plugin.register(registry)
+    plugin = HermesA2AV3Plugin()
+    plugin.register(registry)
 
 
 __all__ = ["HermesA2AV2Plugin", "HermesA2AV3Plugin", "register", "__version__"]

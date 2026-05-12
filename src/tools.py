@@ -17,10 +17,27 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from .identity import VaultResolver, resolve_agent as _resolve_agent_by_name, list_agents as _list_agents
-from .platforms.telegram import TelegramHandler
-
 logger = logging.getLogger(__name__)
+
+# Lazy callbacks injected by plugin.py during register()
+_ensure_server: Optional[callable] = None
+_get_vault_resolver: Optional[callable] = None
+
+
+def _vault():
+    """Lazily get vault resolver."""
+    if _get_vault_resolver is not None:
+        return _get_vault_resolver()
+    from .identity import VaultResolver
+    return VaultResolver({})
+
+
+def _resolve_agent_by_name(name: str):
+    return _vault().resolve_agent(name)
+
+
+def _list_agents():
+    return _vault().list_agents()
 
 _DEFAULT_TIMEOUT = 120
 _POLL_INTERVAL = 5
@@ -556,7 +573,7 @@ def handle_telegram(
 
     # Own bot_token: resolve from caller's own vault via VaultResolver
     try:
-        own_vault = VaultResolver({}).resolve()
+        own_vault = _vault().resolve()
     except RuntimeError:
         return {"error": "Cannot resolve own vault — bot_token not available"}
 
@@ -591,6 +608,7 @@ def handle_telegram(
         header += f"[ref:{ref}]"
     padded_message = f"{header} {message}"
 
+    from .platforms.telegram import TelegramHandler
     handler = TelegramHandler()
     result = handler.send_message(
         token=own_bot_token,
@@ -614,9 +632,20 @@ def handle_telegram(
 # ----------------------------------------------------------------------
 
 
-def register(registry) -> None:
-    """Register all A2A tools with the Hermes gateway registry."""
+def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
+    """Register all A2A tools with the Hermes gateway registry.
+
+    Args:
+        registry: Hermes plugin registry
+        ensure_server: Callback to start the A2A server (lazy init)
+        get_vault_resolver: Callable returning a VaultResolver instance
+    """
     from . import schemas
+
+    # Store callbacks for lazy startup
+    global _ensure_server, _get_vault_resolver
+    _ensure_server = ensure_server
+    _get_vault_resolver = get_vault_resolver
 
     registry.tools.register(
         name=schemas.A2A_DISCOVER["name"],
