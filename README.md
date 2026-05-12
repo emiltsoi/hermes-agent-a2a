@@ -1,145 +1,125 @@
-# hermes-agent-a2a
+# Hermes A2A Plugin
 
-Hermes Agent A2A communication plugin — vault-based, fleet-agnostic, self-configuring.
+A self-contained A2A (Agent-to-Agent) protocol plugin for [Hermes Agent](https://github.com/your-org/hermes-agent). No fleet paths, no hardcoded identities, no gateway patches.
 
-## What This Plugin Does
+---
 
-This is **not** a standalone Telegram bot. It layers on top of the standard Hermes Telegram gateway platform.
+## What this plugin does
 
-| What | Where |
-|------|-------|
-| Telegram message receive/send | Standard Hermes Telegram platform (`gateway/platforms/telegram.py`) |
-| Bot token + chat_id resolution | This plugin (vault → env → config) |
-| Token validation on boot | This plugin |
-| Webhook route bootstrap | This plugin |
+| Capability | Description |
+|---|---|
+| **A2A HTTP Server** | Runs an HTTP server (`/a2a/*`) on a configurable port. Agents discover each other via the A2A discovery protocol. |
+| **Vault Identity** | Reads Telegram bot tokens, chat IDs, and agent names from `vault.yaml` via `VaultResolver`. Profile-relative — works for any profile. |
+| **4 Tools** | `a2a_discover`, `a2a_list`, `a2a_call`, `a2a_telegram` — wired into Hermes Agent when the plugin is installed. |
+| **Webhook Routing** | `pre_gateway_dispatch` hook intercepts Telegram updates and routes them to the A2A server when addressed to a known agent. |
 
-**You need both:**
-- `telegram` in `platforms.enabled` in your config (standard gateway)
-- `hermes-a2a-v2` in `plugins.enabled` (this plugin)
+---
 
-**And the gateway session injection patch** — see `scripts/gateway-session-inject.patch`. This is a one-line change to `gateway/run.py` that allows webhook-sourced sessions to route to Telegram DMs without being blocked by the user allowlist. Required for A2A Telegram routing to work.
+## What Hermes Agent provides
 
-## Features
+When this plugin is installed, these tools become available to your agent automatically:
 
-- **Telegram-only (v1)** — works with the standard Hermes Telegram gateway platform
-- **Vault resolution chain**: agent vault → profile vault → env vars → explicit config
-- **Auto-source bootstrap**: webhook routes automatically filled with `source` block from vault
-- **Schema validation**: required fields, type checking, sensible defaults — fail-fast on misconfiguration
-- **Boot-time token validation**: Telegram bot token validated on every startup via `getMe` API
+- **`a2a_discover`** — Probe a host for A2A protocol support
+- **`a2a_list`** — List agent capabilities from the local A2A server
+- **`a2a_call`** — Send a task to a remote agent via A2A (supports mode 2 and 3)
+- **`a2a_telegram`** — Send a message via a Telegram bot using vault credentials
 
-## Installation
+---
 
-### Option A — Clone and run the installer (recommended)
+## Install
 
-```bash
-git clone https://github.com/emiltsoi/hermes-agent-a2a.git /tmp/hermes-a2a-v2
-bash /tmp/hermes-a2a-v2/install.sh
-```
-
-### Option B — Pip install from source
-
-Requires Python 3.10+ and a virtual environment:
+### Option A: Automated installer (recommended)
 
 ```bash
-git clone https://github.com/emiltsoi/hermes-agent-a2a.git
-cd hermes-agent-a2a
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+curl -sSL https://raw.githubusercontent.com/your-org/hermes-agent-a2a/main/install.sh | bash
 ```
 
-> **Note:** On Ubuntu/Debian with system Python, pass `--break-system-packages` or use a venv. The installer script handles this automatically.
-
-## Quick Start
-
-**1. Create a vault file:**
+### Option B: pip install from source
 
 ```bash
-mkdir -p ~/.hermes/profiles/default/a2a
+pip install -e /path/to/hermes-agent-a2a
 ```
 
-Create `~/.hermes/profiles/default/a2a/vault.yaml`:
-
-```yaml
-platforms:
-  telegram:
-    bot_token: "123456789:ABCdefGhIJKlmNoPQRsTUVwxYZ"
-    default_chat_id: "111222333"
-
-defaults:
-  platform: telegram
-  chat_type: dm
-  chat_id_resolver: default_chat_id
-```
-
-Or set env vars instead:
+### Option C: ClawHub
 
 ```bash
-export A2A_TELEGRAM_BOT_TOKEN="123456789:ABCdefGhIJKlmNoPQRsTUVwxYZ"
-export A2A_OWNER_CHAT_ID="111222333"
+hermes plugin install hermes-agent-a2a
 ```
 
-**2. Enable the plugin** in `~/.hermes/config.yaml`:
+---
 
-```yaml
-plugins:
-  enabled:
-    - hermes-a2a-v2
+## Configure
+
+The plugin stores identity in a **vault file** — no hardcoded tokens anywhere.
+
+1. Copy the example vault:
+
+   ```bash
+   cp vault.yaml.example ~/.hermes/profiles/<profile>/a2a/vault.yaml
+   ```
+
+2. Edit `vault.yaml`:
+
+   ```yaml
+   telegram:
+     bot_token: "your-bot-token-from-botfather"
+     chat_id: "your-telegram-chat-id"
+
+   agent:
+     name: "britney"   # your agent's name
+   ```
+
+3. Set your profile in the Hermes Agent environment:
+
+   ```bash
+   HERMES_PROFILE=<profile>  # defaults to "default"
+   ```
+
+---
+
+## Usage
+
+### Discover a remote agent
+
+```
+a2a_discover host=agent.example.com port=8000
 ```
 
-**3. Restart and verify:**
-
-```bash
-hermes restart
-hermes plugins
-```
-
-## Configuration
-
-The plugin is configured via `plugin.yaml` in the plugin directory. Runtime configuration is resolved through the vault chain:
-
-| Priority | Source | Example |
-|----------|--------|---------|
-| 1 | Agent vault | `profiles/<agent>/a2a/vault.yaml` |
-| 2 | Profile vault | `profiles/<profile>/a2a/vault.yaml` |
-| 3 | Environment variables | `A2A_TELEGRAM_BOT_TOKEN`, `A2A_OWNER_CHAT_ID` |
-| 4 | Explicit config | `config.yaml` (last resort) |
-
-Set `vault: none` in explicit config to skip vault resolution entirely and force explicit config only.
-
-## Plugin Structure
+### List local agent capabilities
 
 ```
-hermes-agent-a2a/
-├── plugin.yaml          # Plugin descriptor
-├── pyproject.toml       # Package metadata
-├── install.sh           # Interactive installer
-├── QUICKSTART.md        # Setup guide
-├── scripts/
-│   └── gateway-session-inject.patch  # Gateway patch (apply before use)
-├── src/
-│   ├── __init__.py     # Package entry point
-│   ├── plugin.py        # Plugin class + on_boot
-│   ├── identity.py      # Vault resolution chain
-│   ├── bootstrap.py     # Auto-source bootstrap
-│   ├── schema.py        # Config schema + defaults
-│   ├── validators.py    # Boot-time health checks
-│   ├── platforms/
-│   │   ├── __init__.py
-│   │   ├── base.py      # Platform abstraction
-│   │   └── telegram.py  # Telegram API handler
-├── vault/               # Example vault (not installed)
-│   └── test-vault.yaml
-├── templates/
-│   └── agent-config.yaml
-└── tests/
-    ├── conftest.py
-    └── test_*.py        # identity, bootstrap, schema, validators, plugin
+a2a_list
 ```
 
-## Credits
+### Call a remote agent (mode 2: streaming)
 
-Forked from `@iamagenius00/hermes-a2a` — [original repository](https://github.com/iamagenius00/hermes-a2a) (non-functional, now removed). Fixed and adapted for the Hermes fleet architecture.
+```
+a2a_call agent_id=agent-123 method=tasks/send mode=2 params={"message": {"role": "user", "content": "hello"}}
+```
 
-## License
+### Call a remote agent (mode 3: single response)
 
-MIT
+```
+a2a_call agent_id=agent-123 method=tasks/send mode=3 params={"message": {"role": "user", "content": "hello"}}
+```
+
+### Send a Telegram message
+
+```
+a2a_telegram message="Hello from the A2A plugin!"
+```
+
+---
+
+## No gateway patch
+
+This plugin is **fully self-contained**. It does not modify the Hermes Agent gateway or core server. All A2A functionality lives in:
+
+- `src/plugin.py` — plugin registration
+- `src/server.py` — A2A HTTP server
+- `src/tools.py` — 4 tool handlers
+- `src/identity.py` — `VaultResolver` (vault.yaml-based identity)
+- `src/hooks.py` — Telegram webhook hook
+- `src/bootstrap.py` — capability bootstrap
+
+Install, configure, restart — done.

@@ -1,39 +1,4 @@
 __pycache__/
-*.py[cod]
-*.so
-.Python
-build/
-dist/
-*.egg-info/
-.eggs/
-.venv/
-.venv
-venv/
-ENV/
+*.pyc
+*.pyo
 .pytest_cache/
-.ruff_cache/
-*.egg
-*.whl
-
-# Environment
-.env
-.env.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Test
-.coverage
-htmlcov/
-.nox/
-
-# Hermes
-profiles/
-*.vault.yaml

@@ -1,4 +1,4 @@
-"""Boot-time health checks for HermesA2A v2.
+"""Boot-time health checks for HermesA2A v3.
 
 Plugin refuses to start if identity is invalid, instead of failing silently on first float.
 """
@@ -26,7 +26,7 @@ class BootValidator:
 
         if not token:
             raise RuntimeError(
-                "A2A identity error: no valid bot token found in fleet or agent vault. "
+                "A2A identity error: no valid bot token found in vault or env. "
                 "Set A2A_TELEGRAM_BOT_TOKEN env var or configure bot_token in vault.yaml."
             )
 
@@ -46,13 +46,11 @@ class BootValidator:
                 "Set A2A_OWNER_CHAT_ID env var or configure default_chat_id in vault.yaml."
             )
 
-        # Validate chat_id is a non-zero integer or integer string
         try:
             parsed = int(chat_id)
         except (ValueError, TypeError):
             raise RuntimeError(
-                f"A2A identity error: default_chat_id must be a non-zero integer, "
-                f"got {repr(chat_id)}."
+                f"A2A identity error: default_chat_id must be a non-zero integer, got {repr(chat_id)}."
             )
         if parsed == 0:
             raise RuntimeError(
@@ -75,11 +73,11 @@ class BootValidator:
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 raise RuntimeError(
-                    f"A2A identity error: bot token rejected by Telegram API (401). "
-                    f"Check that the bot token is correct and active."
+                    "A2A identity error: bot token rejected by Telegram API (401). "
+                    "Check that the bot token is correct and active."
                 )
             logger.warning(
                 f"[BootValidator] transient Telegram API error ({e.code}) during token "
-                f"verification — boot continues. This may indicate rate-limiting or an "
-                f"upstream outage. Token will be re-verified on next boot."
+                "verification — boot continues. This may indicate rate-limiting or an "
+                "upstream outage. Token will be re-verified on next boot."
             )

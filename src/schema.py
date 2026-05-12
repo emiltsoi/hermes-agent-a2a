@@ -1,4 +1,4 @@
-"""Config schema for HermesA2A v2.
+"""Config schema for HermesA2A v3.
 
 Defines required fields, defaults, and validation rules.
 Unknown fields are warned (not rejected) for backward compat.
@@ -47,24 +47,17 @@ A2A_SCHEMA = {
 
 def validate_config(config: dict) -> tuple[bool, list[str]]:
     """Validate A2A config. Returns (valid, warnings).
-    
-    Checks:
-    - Required top-level fields present
-    - Field types match schema
-    - Unknown keys generate warnings (not errors)
-    
+
     Raises:
         RuntimeError: if required field is missing or type is invalid.
     """
     warnings = []
 
-    # 1. Check required top-level fields
     required = A2A_SCHEMA.get("required", [])
     for field in required:
         if field not in config:
             raise RuntimeError(f"A2A config error: required field '{field}' is missing")
 
-    # 2. Check field types (including nested required fields)
     _validate_types(
         config,
         A2A_SCHEMA["properties"],
@@ -73,7 +66,6 @@ def validate_config(config: dict) -> tuple[bool, list[str]]:
         warnings
     )
 
-    # 3. Unknown key warnings (backward compat)
     known_keys = set(A2A_SCHEMA["properties"].keys())
     for key in config.keys():
         if key not in known_keys:
@@ -87,7 +79,6 @@ def _validate_types(value: Any, schema_props: dict, required: list, path: str, w
     for key, schema_def in schema_props.items():
         current_path = f"{path}.{key}" if path else key
 
-        # Check required sub-fields (for nested objects)
         if schema_def.get("required"):
             for req_key in schema_def["required"]:
                 if req_key not in value.get(key, {}):
@@ -101,7 +92,6 @@ def _validate_types(value: Any, schema_props: dict, required: list, path: str, w
         val = value[key]
         expected_type = schema_def.get("type")
 
-        # Type checks
         type_map = {"string": str, "boolean": bool, "object": dict, "number": (int, float)}
         if expected_type in type_map:
             py_types = type_map[expected_type]
@@ -111,7 +101,6 @@ def _validate_types(value: Any, schema_props: dict, required: list, path: str, w
                     f"got {type(val).__name__} ('{repr(val)[:30]}')"
                 )
 
-        # Recurse into nested object
         if expected_type == "object" and isinstance(val, dict):
             nested_props = schema_def.get("properties", {})
             nested_required = schema_def.get("required", [])

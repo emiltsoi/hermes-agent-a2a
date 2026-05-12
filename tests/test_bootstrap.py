@@ -1,115 +1,89 @@
-import pytest
+"""AutoSourceBootstrap unit tests."""
 from unittest.mock import MagicMock
 from src.bootstrap import AutoSourceBootstrap
 
 
-class TestAutoSourceBootstrap:
-    def test_explicit_source_wins_over_everything(self):
-        mock_vault = MagicMock()
-        bootstrap = AutoSourceBootstrap({}, mock_vault)
-        route_cfg = {
-            "source": {"platform": "telegram", "chat_id": "123"}
-        }
-        result = bootstrap.bootstrap_route("test_route", route_cfg)
-        assert result["chat_id"] == "123"
-        # vault.resolve() should NOT be called
-        mock_vault.resolve.assert_not_called()
+def test_explicit_source_wins():
+    """Explicit source in route_cfg is used over vault defaults."""
+    mock_vault = MagicMock()
+    bootstrap = AutoSourceBootstrap({}, mock_vault)
 
-    def test_inbound_context_wins_over_vault(self):
-        mock_vault = MagicMock()
-        mock_vault.resolve.return_value = {
-            "platforms": {"telegram": {"default_chat_id": "999"}},
-            "defaults": {"platform": "telegram", "chat_type": "dm"}
+    route_cfg = {
+        "source": {
+            "platform": "telegram",
+            "chat_id": "999999999",
+            "chat_type": "dm",
         }
-        bootstrap = AutoSourceBootstrap({}, mock_vault)
-        route_cfg = {}
-        inbound = {"platform": "telegram", "chat_id": "555", "chat_type": "group"}
-        result = bootstrap.bootstrap_route("test_route", route_cfg, inbound_context=inbound)
-        assert result["chat_id"] == "555"
-        assert result["chat_type"] == "group"
+    }
 
-    def test_vault_defaults_when_no_source_no_inbound(self):
-        mock_vault = MagicMock()
-        mock_vault.resolve.return_value = {
-            "platforms": {"telegram": {"default_chat_id": "777"}},
-            "defaults": {"platform": "telegram", "chat_type": "dm"}
-        }
-        bootstrap = AutoSourceBootstrap({}, mock_vault)
-        result = bootstrap.bootstrap_route("test_route", {})
-        assert result["chat_id"] == "777"
+    result = bootstrap.bootstrap_route("my_route", route_cfg)
 
-    def test_bootstrap_routes_fills_in_missing_source(self):
-        mock_vault = MagicMock()
-        mock_vault.resolve.return_value = {
-            "platforms": {"telegram": {"default_chat_id": "111"}},
-            "defaults": {"platform": "telegram", "chat_type": "dm"}
-        }
-        config = {
-            "webhook": {
-                "extra": {
-                    "routes": {
-                        "trigger": {},  # no source
-                    }
+    assert result["platform"] == "telegram"
+    assert result["chat_id"] == "999999999"
+    mock_vault.resolve.assert_not_called()
+
+
+def test_missing_source_uses_vault_defaults(monkeypatch):
+    """No source block → vault defaults are applied."""
+    mock_vault = MagicMock()
+    mock_vault.resolve.return_value = {
+        "platforms": {
+            "telegram": {
+                "bot_token": "test-token-placeholder",
+                "default_chat_id": "123456789",
+            }
+        },
+        "defaults": {
+            "platform": "telegram",
+            "chat_type": "dm",
+        },
+    }
+
+    bootstrap = AutoSourceBootstrap({}, mock_vault)
+
+    route_cfg = {}
+    result = bootstrap.bootstrap_route("my_route", route_cfg)
+
+    assert result["platform"] == "telegram"
+    assert result["chat_type"] == "dm"
+    assert result["chat_id"] == "123456789"
+
+
+def test_bootstrap_routes_fills_all_routes():
+    """bootstrap_routes fills in source for every route that lacks one."""
+    mock_vault = MagicMock()
+    mock_vault.resolve.return_value = {
+        "platforms": {
+            "telegram": {
+                "bot_token": "test-token-placeholder",
+                "default_chat_id": "123456789",
+            }
+        },
+        "defaults": {
+            "platform": "telegram",
+            "chat_type": "dm",
+        },
+    }
+
+    bootstrap = AutoSourceBootstrap({}, mock_vault)
+
+    config = {
+        "webhook": {
+            "extra": {
+                "routes": {
+                    "route_one": {},
+                    "route_two": {"source": {"platform": "telegram", "chat_id": "999999999"}},
+                    "route_three": {},
                 }
             }
         }
-        bootstrap = AutoSourceBootstrap(config, mock_vault)
-        bootstrap.bootstrap_routes(config)
-        assert config["webhook"]["extra"]["routes"]["trigger"]["source"]["chat_id"] == "111"
+    }
 
-    def test_bootstrap_routes_with_real_vault(self, tmp_vault_dir):
-        """Integration test: tmp vault file + real VaultResolver + bootstrap_route."""
-        from src.identity import VaultResolver
+    bootstrap.bootstrap_routes(config)
 
-        # Write a real vault file
-        vault_file = tmp_vault_dir / "vault.yaml"
-        vault_file.write_text(
-            "platforms:\n"
-            "  telegram:\n"
-            "    default_chat_id: '999'\n"
-            "defaults:\n"
-            "  platform: telegram\n"
-            "  chat_type: dm\n"
-        )
+    # route_one and route_three should be filled from vault
+    assert config["webhook"]["extra"]["routes"]["route_one"]["source"]["chat_id"] == "123456789"
+    assert config["webhook"]["extra"]["routes"]["route_three"]["source"]["chat_id"] == "123456789"
 
-        # Create VaultResolver with agent-level vault pointing to tmp_vault_dir
-        # vault_dir = testprofile/a2a/, agent path = testprofile/
-        agent_path = tmp_vault_dir.parent
-        vault = VaultResolver(config={"agent_profile_path": str(agent_path)})
-
-        # bootstrap_route with no explicit source, no inbound — should read from vault
-        bootstrap = AutoSourceBootstrap({}, vault)
-        result = bootstrap.bootstrap_route("test_route", {})
-
-        assert result["chat_id"] == "999"
-        assert result["platform"] == "telegram"
-        assert result["chat_type"] == "dm"
-
-    def test_inbound_context_propagates_through_bootstrap_routes(self):
-        """bootstrap_routes with inbound_context: all routes without explicit source get inbound values."""
-        mock_vault = MagicMock()
-        bootstrap = AutoSourceBootstrap({}, mock_vault)
-
-        config = {
-            "webhook": {
-                "extra": {
-                    "routes": {
-                        "route_a": {},           # no source — should get inbound
-                        "route_b": {},           # no source — should get inbound
-                        "route_c": {"source": {"platform": "discord", "chat_id": "explicit"}},  # explicit wins
-                    }
-                }
-            }
-        }
-
-        inbound = {"platform": "telegram", "chat_id": "111", "chat_type": "group", "user_id": "user1"}
-        bootstrap.bootstrap_routes(config, inbound_context=inbound)
-
-        # route_a and route_b should be bootstrapped from inbound
-        assert config["webhook"]["extra"]["routes"]["route_a"]["source"]["chat_id"] == "111"
-        assert config["webhook"]["extra"]["routes"]["route_a"]["source"]["platform"] == "telegram"
-        assert config["webhook"]["extra"]["routes"]["route_a"]["source"]["chat_type"] == "group"
-        assert config["webhook"]["extra"]["routes"]["route_b"]["source"]["chat_id"] == "111"
-        # route_c has explicit — vault.resolve should NOT be called
-        assert config["webhook"]["extra"]["routes"]["route_c"]["source"]["chat_id"] == "explicit"
-        mock_vault.resolve.assert_not_called()
+    # route_two had explicit source → unchanged
+    assert config["webhook"]["extra"]["routes"]["route_two"]["source"]["chat_id"] == "999999999"

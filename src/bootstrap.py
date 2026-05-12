@@ -25,12 +25,10 @@ class AutoSourceBootstrap:
         inbound_context: Optional[dict] = None,
     ) -> dict:
         """Return a source dict for a route. Priority: inbound > explicit > vault > defaults."""
-        # Explicit wins
         if route_cfg.get("source"):
             logger.debug(f"[AutoSourceBootstrap] route {route_name}: using explicit source")
             return route_cfg["source"]
 
-        # Inbound context wins over vault
         if inbound_context:
             logger.debug(f"[AutoSourceBootstrap] route {route_name}: bootstrapping from inbound context")
             return {
@@ -41,7 +39,6 @@ class AutoSourceBootstrap:
                 "user_name": inbound_context.get("user_name"),
             }
 
-        # Vault defaults
         resolved = self.vault.resolve()
         telegram_cfg = resolved.get("platforms", {}).get("telegram", {})
         defaults = resolved.get("defaults", {})

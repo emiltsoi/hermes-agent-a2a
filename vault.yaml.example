@@ -1,0 +1,9 @@
+# A2A Plugin Vault Configuration
+# Copy to profiles/<profile>/a2a/vault.yaml and fill in values
+
+telegram:
+  bot_token: ""  # Your bot token from @BotFather
+  chat_id: ""    # Your Telegram chat ID
+
+agent:
+  name: ""       # Your agent's name (e.g. "britney", "linda")
