@@ -26,9 +26,9 @@ def _get_version() -> str:
 __version__ = _get_version()
 
 
-class HermesA2APlugin:
+class HermesA2AV3Plugin:
     name = "hermes-agent-a2a"
-    version = __version__
+    version = "3.0.0"
 
     def __init__(self, config: dict):
         self.config = config
@@ -36,18 +36,13 @@ class HermesA2APlugin:
         self.bootstrap = AutoSourceBootstrap(config, self.vault_resolver)
         self.validator = BootValidator(self.vault_resolver)
 
+    def register(self, registry) -> None:
+        """Phase 1 — no tools registered yet."""
+        pass
+
     def on_boot(self) -> None:
         """Run before the gateway starts accepting messages."""
-        resolved_identity = self.vault_resolver.resolve()
-        self.validator.validate(resolved_identity)
-        token = (
-            resolved_identity.get("platforms", {})
-            .get("telegram", {})
-            .get("bot_token", "")
-        )
-        self.validator.validate_token_with_telegram(token)
-        self.bootstrap.bootstrap_routes(self.config)
-        logger.info("[HermesA2A] boot complete -- identity resolved, routes bootstrapped, token verified")
+        logger.info("Phase 1 — identity only, no tools registered.")
 
     def on_shutdown(self) -> None:
         """Run on gateway shutdown."""
