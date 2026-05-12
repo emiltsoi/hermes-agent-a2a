@@ -10,6 +10,7 @@ from .bootstrap import AutoSourceBootstrap
 from .validators import BootValidator
 from . import server as a2a_server_module
 from . import hooks
+from . import tools as _tools
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,9 @@ class HermesA2AV3Plugin:
         registry.hooks.register("post_llm_call", hooks.post_llm_call)
         registry.hooks.register("pre_gateway_dispatch", hooks.pre_gateway_dispatch)
         logger.info("[HermesA2A] Phase 2 hooks registered")
+
+        _tools.register(registry)
+        logger.info("[HermesA2A] Phase 3 tools registered")
 
     def on_boot(self) -> None:
         """Start the A2A HTTP server before the gateway accepts messages."""
