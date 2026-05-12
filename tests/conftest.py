@@ -22,3 +22,12 @@ def clean_hermes_home_env(monkeypatch):
     if old_home is None:
         os.environ.pop("HERMES_HOME", None)
     shutil.rmtree(tmp_home, ignore_errors=True)
+
+
+@pytest.fixture
+def tmp_hermes_home():
+    """Return the current HERMES_HOME temp directory path.
+
+    The autouse clean_hermes_home_env fixture sets this before every test.
+    """
+    return os.environ.get("HERMES_HOME")
