@@ -127,7 +127,7 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
 # ----------------------------------------------------------------------
 
 
-def handle_discover(name: Optional[str] = None, url: Optional[str] = None) -> dict:
+def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
     """Fetch a remote agent's Agent Card by name or direct URL.
 
     Uses VaultResolver.resolve_agent(name) to look up the agent's a2a_url.
@@ -184,7 +184,7 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None) -> di
 # ----------------------------------------------------------------------
 
 
-def handle_list() -> dict:
+def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
     """Return all agents registered in the vault registry.
 
     Uses VaultResolver.list_agents() to enumerate $HERMES_HOME/profiles/*/a2a/vault.yaml.
@@ -423,6 +423,7 @@ def handle_call(
     task_id: Optional[str] = None,
     intent: Optional[str] = None,
     expected_action: Optional[str] = None,
+    user_task: Optional[str] = None,
 ) -> dict:
     """Send a task/message to a remote A2A agent.
 
@@ -560,6 +561,8 @@ def handle_telegram(
     message: str,
     cta: str = "reply",
     ref: Optional[str] = None,
+    task_id: Optional[str] = None,
+    user_task: Optional[str] = None,
 ) -> dict:
     """Send a fire-and-forget Telegram DM to a mesh peer.
 
