@@ -26,18 +26,23 @@ def _get_task_queue():
     return state.get("task_queue")
 
 
-def pre_llm_call(agent, messages: list) -> dict:
+def pre_llm_call(conversation_history=None, user_message=None, **kwargs) -> dict:
     """If a pending A2A task exists and the agent is idle, inject task context.
 
     Returns ``{"context": "[A2A trigger]<task_id>|<sender_name>|<task_text>"}``
     which the agent receives as an extra user message. The task is marked
     as processing so subsequent calls don't double-inject.
     """
+    logger.debug("[A2A hooks] pre_llm_call FIRED — messages=%d",
+                  len(kwargs.get("conversation_history", [])))
     queue = _get_task_queue()
     if queue is None:
+        logger.warning("[A2A hooks] pre_llm_call: queue is None")
         return {}
 
     pending = queue.drain_pending()
+    logger.info("[A2A hooks] pre_llm_call: queue=%s, pending_count=%d, drained=%d",
+                id(queue), queue.pending_count(), len(pending))
     if not pending:
         return {}
 
@@ -57,11 +62,14 @@ def pre_llm_call(agent, messages: list) -> dict:
     return {"context": context}
 
 
-def post_llm_call(agent, assistant_response: str, task_id: str | None = None) -> None:
+def post_llm_call(conversation_history=None, assistant_response=None, session_id=None, model=None, platform=None, **kwargs) -> None:
     """After the LLM generates a response, write it to the task queue and persist.
 
     If no ``task_id`` is provided, completes the oldest processing task.
     """
+    task_id = kwargs.get("task_id")
+    logger.info("[A2A hooks] post_llm_call called: task_id=%s response_len=%d",
+                task_id, len(assistant_response) if assistant_response else 0)
     if not assistant_response:
         return
 
@@ -118,7 +126,7 @@ _A2A_TRIGGER_RE = re.compile(r"^\[A2A trigger\]<([^|]+)\|")
 _A2A_TRIGGER_LEGACY_RE = re.compile(r"^\[A2A trigger\]<([^>,]+),([^,]+),(.+)$")
 
 
-def pre_gateway_dispatch(event: str) -> str:
+def pre_gateway_dispatch(event: str, **kwargs) -> str:
     """Replace synthetic ``[A2A trigger]`` text with the real task content.
 
     When the gateway receives an event whose text begins with ``[A2A trigger]``,
@@ -126,8 +134,9 @@ def pre_gateway_dispatch(event: str) -> str:
     If the trigger pattern doesn't match or the task isn't found, the original
     text is returned unchanged.
     """
-    if not event.startswith("[A2A trigger]"):
-        return event
+    event_text = event  # event is a string in this hook context
+    if not event_text.startswith("[A2A trigger]"):
+        return event_text
 
     queue = _get_task_queue()
     if queue is None:
