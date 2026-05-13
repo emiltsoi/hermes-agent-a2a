@@ -53,6 +53,8 @@ def _normalize_identity(raw: dict) -> dict:
     if not isinstance(raw, dict):
         return {}
     data = dict(raw)
+    if "id" not in data and data.get("name"):
+        data["id"] = str(data.get("name")).lower()
     platforms = data.get("platforms")
     if not isinstance(platforms, dict):
         platforms = {}
@@ -66,6 +68,47 @@ def _normalize_identity(raw: dict) -> dict:
     if telegram:
         platforms["telegram"] = telegram
         data["platforms"] = platforms
+    transports = data.get("transports")
+    if not isinstance(transports, dict):
+        transports = {}
+    a2a_rpc = transports.get("a2a_rpc")
+    if not isinstance(a2a_rpc, dict):
+        a2a_rpc = {}
+    hermes_webhook = transports.get("hermes_webhook")
+    if not isinstance(hermes_webhook, dict):
+        hermes_webhook = {}
+    if not a2a_rpc.get("url") and data.get("a2a_url"):
+        a2a_rpc["url"] = data.get("a2a_url")
+    if not a2a_rpc.get("protocol"):
+        a2a_rpc["protocol"] = "google-a2a"
+    if not a2a_rpc.get("auth"):
+        auth = {}
+        if data.get("auth_token"):
+            auth = {"type": "bearer", "token": data.get("auth_token")}
+        a2a_rpc["auth"] = auth or {"type": "none"}
+    if a2a_rpc.get("url"):
+        transports["a2a_rpc"] = a2a_rpc
+        data["a2a_url"] = a2a_rpc.get("url", "")
+        a2a_auth = a2a_rpc.get("auth") or {}
+        if not data.get("auth_token"):
+            data["auth_token"] = a2a_auth.get("token", "")
+    if not hermes_webhook.get("url") and data.get("webhook_url"):
+        hermes_webhook["url"] = data.get("webhook_url")
+    if not hermes_webhook.get("protocol"):
+        hermes_webhook["protocol"] = "hermes-webhook"
+    if not hermes_webhook.get("auth"):
+        auth = {}
+        if data.get("webhook_secret"):
+            auth = {"type": "hmac-sha256", "secret": data.get("webhook_secret")}
+        hermes_webhook["auth"] = auth or {"type": "none"}
+    if hermes_webhook.get("url"):
+        transports["hermes_webhook"] = hermes_webhook
+        data["webhook_url"] = hermes_webhook.get("url", "")
+        webhook_auth = hermes_webhook.get("auth") or {}
+        if not data.get("webhook_secret"):
+            data["webhook_secret"] = webhook_auth.get("secret", "")
+    if transports:
+        data["transports"] = transports
     if "defaults" not in data:
         data["defaults"] = {"platform": "telegram", "chat_type": "dm"}
     return data
@@ -89,6 +132,18 @@ def _load_yaml_file(path: Path) -> Optional[dict]:
     if not raw:
         return None
     data = _normalize_identity(raw)
+    for transport in data.get("transports", {}).values():
+        auth = transport.get("auth")
+        if isinstance(auth, dict):
+            if "token" in auth:
+                auth["token"] = _resolve_env(auth["token"])
+            if "secret" in auth:
+                auth["secret"] = _resolve_env(auth["secret"])
+            if auth.get("token_env") and not auth.get("token"):
+                auth["token"] = os.environ.get(auth["token_env"], "")
+            if auth.get("secret_env") and not auth.get("secret"):
+                auth["secret"] = os.environ.get(auth["secret_env"], "")
+    data = _normalize_identity(data)
     platforms = data.get("platforms", {})
     for platform, cfg in platforms.items():
         if "bot_token" in cfg:

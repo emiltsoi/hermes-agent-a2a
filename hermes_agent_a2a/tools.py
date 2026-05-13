@@ -101,6 +101,20 @@ def _dict_args_handler(func):
     return wrapper
 
 
+def _transport(agent_info: dict, name: str) -> dict:
+    if not isinstance(agent_info, dict):
+        return {}
+    transport = agent_info.get("transports", {}).get(name, {})
+    return transport if isinstance(transport, dict) else {}
+
+
+def _transport_auth_value(transport: dict, key: str) -> str:
+    auth = transport.get("auth", {}) if isinstance(transport, dict) else {}
+    if not isinstance(auth, dict):
+        return ""
+    return auth.get(key, "") or ""
+
+
 # ----------------------------------------------------------------------
 # HTTP helper
 # ----------------------------------------------------------------------
@@ -153,8 +167,9 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_
         agent_info = _resolve_agent_by_name(name)
         if not agent_info:
             return {"error": f"Agent '{name}' not found in vault registry"}
-        target_url = agent_info.get("a2a_url", "")
-        auth_token = agent_info.get("auth_token", "")
+        a2a_rpc = _transport(agent_info, "a2a_rpc")
+        target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
+        auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -359,8 +374,9 @@ def _handle_call_mode3(
     agent_info = _resolve_agent_by_name(name)
     if not agent_info:
         return {"error": f"Agent '{name}' not found in vault registry"}
-    target_url = agent_info.get("a2a_url", "")
-    auth_token = agent_info.get("auth_token", "")
+    a2a_rpc = _transport(agent_info, "a2a_rpc")
+    target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
+    auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
     if not target_url:
         return {"error": f"Agent '{name}' has no a2a_url in vault"}
 
@@ -462,8 +478,9 @@ def handle_call(
         agent_info = _resolve_agent_by_name(name)
         if not agent_info:
             return {"error": f"Agent '{name}' not found in vault registry"}
-        target_url = agent_info.get("a2a_url", "")
-        auth_token = agent_info.get("auth_token", "")
+        a2a_rpc = _transport(agent_info, "a2a_rpc")
+        target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
+        auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -627,11 +644,12 @@ def handle_telegram(args: dict = None, **kwargs) -> dict:
     padded_message = f"{header} {message}"
 
     # Part 1: Webhook to target agent's gateway relay.
-    target_webhook_url = target_info.get("webhook_url", "") if isinstance(target_info, dict) else ""
+    hermes_webhook = _transport(target_info, "hermes_webhook")
+    target_webhook_url = hermes_webhook.get("url", "") or (target_info.get("webhook_url", "") if isinstance(target_info, dict) else "")
     import hashlib, hmac, json as _json
     delivery_id = None
     if target_webhook_url:
-        webhook_secret = target_info.get("webhook_secret", "") if isinstance(target_info, dict) else ""
+        webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (target_info.get("webhook_secret", "") if isinstance(target_info, dict) else "")
         body = _json.dumps({"text": padded_message})
         sig = hmac.new(
             webhook_secret.encode(),
