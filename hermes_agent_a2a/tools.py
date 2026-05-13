@@ -562,16 +562,16 @@ def handle_call(
 
 
 # ----------------------------------------------------------------------
-# Tool: telegram
+# Tool: session message
 # ----------------------------------------------------------------------
 
 
 def handle_telegram(args: dict = None, **kwargs) -> dict:
-    """Send a fire-and-forget Telegram DM to a mesh peer.
+    """Send a session-aware message to a Hermes mesh peer.
 
-    Two-part delivery (matching v1/v2 a2a_telegram):
-    1. Echo to Emil via sender's Telegram bot (so Emil sees what was sent)
-    2. Webhook to target agent's relay (so target agent can process the A2A message)
+    Two-part delivery:
+    1. Webhook to target agent's Hermes gateway relay.
+    2. Echo to sender's Telegram DM when configured.
 
     Routes the message to the target agent's gateway webhook so that the
     target gateway/config resolves it into the target Telegram session and
@@ -675,7 +675,7 @@ def handle_telegram(args: dict = None, **kwargs) -> dict:
         if not echo_ok:
             import logging
             logging.getLogger(__name__).warning(
-                "[a2a_telegram] Echo to Emil failed (non-fatal): %s", echo_result
+                "[a2a_send_session_message] sender echo failed (non-fatal): %s", echo_result
             )
 
     return {

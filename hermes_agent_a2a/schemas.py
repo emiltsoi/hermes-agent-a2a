@@ -24,9 +24,9 @@ A2A_DISCOVER = {
 }
 
 A2A_CALL = {
-    "name": "a2a_call",
+    "name": "a2a_send_task",
     "description": (
-        "Send a message/task to a remote A2A agent and get its response. "
+        "Send a protocol-level task/message to an A2A-compatible agent over the A2A RPC transport and get its response. "
         "Use a2a_discover first to learn what the agent can do. "
         "Modes: worker_at=caller (local ephemeral), worker_at=target (remote ephemeral), "
         "default (queued webhook delivery)."
@@ -96,23 +96,24 @@ A2A_LIST = {
 }
 
 A2A_TELEGRAM = {
-    "name": "a2a_telegram",
+    "name": "a2a_send_session_message",
     "description": (
-        "Send a fire-and-forget Telegram DM to a mesh peer. "
+        "Send a message through a target Hermes gateway into its configured platform session context. "
+        "The target gateway owns session routing via config.yaml. "
+        "Also echoes the same message to the sender's own Telegram DM for visibility when configured. "
         "Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][cta:<cta>] header. "
-        "Caller passes raw message; tool handles mesh metadata. "
-        "No response returned — purely one-way delivery."
+        "Caller passes raw message; tool handles mesh metadata."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "message": {
                 "type": "string",
-                "description": "The message body to send (header is auto-padded)",
+                "description": "The message body to send into the target agent's configured session (header is auto-padded)",
             },
             "agent": {
                 "type": "string",
-                "description": "Name of the target mesh peer (e.g. daji, yoyo, jessie, agent0)",
+                "description": "Name of the target Hermes mesh peer (e.g. daji, yoyo, jessie, agent0)",
             },
             "cta": {
                 "type": "string",
