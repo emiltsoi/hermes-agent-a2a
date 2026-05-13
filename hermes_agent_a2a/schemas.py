@@ -17,7 +17,7 @@ A2A_DISCOVER = {
             },
             "name": {
                 "type": "string",
-                "description": "Name of a configured agent from ~/.hermes/config.yaml",
+                "description": "Name of an agent from the A2A fleet identity registry",
             },
         },
     },
@@ -40,7 +40,7 @@ A2A_CALL = {
             },
             "name": {
                 "type": "string",
-                "description": "Name of a configured agent (alternative to url)",
+                "description": "Name of an agent from the A2A fleet identity registry (alternative to url)",
             },
             "message": {
                 "type": "string",
@@ -86,7 +86,7 @@ A2A_CALL = {
 A2A_LIST = {
     "name": "a2a_list",
     "description": (
-        "List all configured remote A2A agents from ~/.hermes/config.yaml. "
+        "List all configured remote A2A agents from the fleet identity registry. "
         "Shows agent names, URLs, and descriptions."
     ),
     "parameters": {

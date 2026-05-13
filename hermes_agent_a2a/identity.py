@@ -36,6 +36,68 @@ def _hermes_home() -> Path:
     return Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
 
 
+def _hermes_root() -> Path:
+    home = _hermes_home()
+    parts = home.parts
+    if "profiles" in parts:
+        idx = parts.index("profiles")
+        return Path(*parts[:idx]) if idx > 0 else Path("/")
+    return home
+
+
+def _fleet_root() -> Path:
+    return Path(os.environ.get("A2A_VAULT_PATH", str(_hermes_root() / "fleet")))
+
+
+def _normalize_identity(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    data = dict(raw)
+    platforms = data.get("platforms")
+    if not isinstance(platforms, dict):
+        platforms = {}
+    telegram = platforms.get("telegram")
+    if not isinstance(telegram, dict):
+        telegram = {}
+    if not telegram.get("bot_token") and data.get("telegram_bot_token"):
+        telegram["bot_token"] = data.get("telegram_bot_token")
+    if not telegram.get("default_chat_id") and data.get("telegram_chat_id"):
+        telegram["default_chat_id"] = data.get("telegram_chat_id")
+    if telegram:
+        platforms["telegram"] = telegram
+        data["platforms"] = platforms
+    if "defaults" not in data:
+        data["defaults"] = {"platform": "telegram", "chat_type": "dm"}
+    return data
+
+
+def _load_yaml_file(path: Path) -> Optional[dict]:
+    if not path.exists():
+        return None
+    import yaml
+    try:
+        with open(path) as f:
+            raw = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise RuntimeError(
+            f"A2A identity error: failed to parse {path} — malformed YAML: {e}"
+        ) from e
+    except OSError as e:
+        raise RuntimeError(
+            f"A2A identity error: failed to read {path}: {e}"
+        ) from e
+    if not raw:
+        return None
+    data = _normalize_identity(raw)
+    platforms = data.get("platforms", {})
+    for platform, cfg in platforms.items():
+        if "bot_token" in cfg:
+            cfg["bot_token"] = _resolve_env(cfg["bot_token"])
+        if "default_chat_id" in cfg:
+            cfg["default_chat_id"] = _resolve_env(cfg["default_chat_id"])
+    return data
+
+
 class VaultResolver:
     """Resolves A2A identity via vault resolution chain."""
 
@@ -91,32 +153,17 @@ class VaultResolver:
         )
 
     def _load_vault(self, base_path: Path) -> Optional[dict]:
-        """Load vault.yaml from a given base path."""
-        vault_path = base_path / "a2a" / "vault.yaml"
-        if not vault_path.exists():
-            return None
-        import yaml
-        try:
-            with open(vault_path) as f:
-                raw = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise RuntimeError(
-                f"A2A vault error: failed to parse {vault_path} — malformed YAML: {e}"
-            ) from e
-        except OSError as e:
-            raise RuntimeError(
-                f"A2A vault error: failed to read {vault_path}: {e}"
-            ) from e
-        if not raw:
-            return None
-        # Resolve ${ENV_VAR} interpolations in vault file values
-        platforms = raw.get("platforms", {})
-        for platform, cfg in platforms.items():
-            if "bot_token" in cfg:
-                cfg["bot_token"] = _resolve_env(cfg["bot_token"])
-            if "default_chat_id" in cfg:
-                cfg["default_chat_id"] = _resolve_env(cfg["default_chat_id"])
-        return raw
+        """Load identity.yaml or vault.yaml from a given base path."""
+        for candidate in (
+            base_path / "identity.yaml",
+            base_path / "vault.yaml",
+            base_path / "a2a" / "identity.yaml",
+            base_path / "a2a" / "vault.yaml",
+        ):
+            data = _load_yaml_file(candidate)
+            if data:
+                return data
+        return None
 
     def _from_env(self) -> Optional[dict]:
         """Read identity directly from environment variables (deployment override)."""
@@ -163,34 +210,46 @@ class VaultResolver:
         """True if vault: none is set — skip vault entirely."""
         return self.config.get("a2a", {}).get("vault", "auto") == "none"
 
+    def resolve_agent(self, name: str) -> Optional[dict]:
+        return resolve_agent(name)
+
+    def list_agents(self) -> list[dict]:
+        return list_agents()
+
 
 def _agent_vault_path() -> Path:
-    """Path to this agent's own vault: $HERMES_HOME/profiles/<agent_name>/a2a/."""
+    """Path to this agent's own vault: $HERMES_HOME/a2a/vault.yaml.
+
+    When HERMES_HOME points to a profile dir (e.g. .../profiles/britney),
+    the vault lives directly under HERMES_HOME/a2a/, not HERMES_HOME/profiles/britney/a2a/.
+    """
     agent_name = os.environ.get("A2A_AGENT_NAME", "").lower()
     if not agent_name:
         return Path("/nonexistent")
-    return _hermes_home() / "profiles" / agent_name
+    return _fleet_root() / "a2a" / "agents" / agent_name
 
 
 def _profile_vault_path() -> Path:
-    """Path to the current profile's vault: $HERMES_HOME/profiles/<profile>/a2a/.
+    """Path to the current profile's vault: $HERMES_HOME/a2a/vault.yaml.
 
-    Profile is inferred from HERMES_HOME if it contains /profiles/, otherwise
-    derived from the A2A_AGENT_NAME for backwards compat.
+    Profile is inferred from HERMES_HOME if it ends with /profiles/<name>.
+    When HERMES_HOME points to a profile dir, the vault is at HERMES_HOME/a2a/.
     """
     home = _hermes_home()
-    # If HERMES_HOME ends with /profiles/<name>, use that
+    # If HERMES_HOME ends with /profiles/<name>, vault is directly under HERMES_HOME/a2a
     parts = home.parts
     if "profiles" in parts:
         idx = parts.index("profiles")
         if idx + 1 < len(parts):
             profile = parts[idx + 1]
-            return home.parent / "profiles" / profile
+            if home.name == profile:
+                # HERMES_HOME is the profile dir — vault is at HERMES_HOME/a2a
+                return home / "a2a"
     # Fallback: use agent name as profile name
     agent_name = os.environ.get("A2A_AGENT_NAME", "").lower()
     if agent_name:
-        return home / "profiles" / agent_name
-    return home / "profiles" / "default"
+        return home / "profiles" / agent_name / "a2a"
+    return home / "profiles" / "default" / "a2a"
 
 
 def resolve_agent(name: str) -> Optional[dict]:
@@ -201,18 +260,33 @@ def resolve_agent(name: str) -> Optional[dict]:
     """
     if not name:
         return None
-    agent_path = _hermes_home() / "profiles" / name.lower()
-    vault_file = agent_path / "a2a" / "vault.yaml"
-    if not vault_file.exists():
-        return None
-    import yaml
+    agent_key = name.lower()
+    identity_file = _fleet_root() / "a2a" / "agents" / agent_key / "identity.yaml"
     try:
-        with open(vault_file) as f:
-            raw = yaml.safe_load(f) or {}
+        identity = _load_yaml_file(identity_file)
+    except RuntimeError:
+        raise
+    except Exception:
+        identity = None
+    if identity:
+        return identity
+    agent_vault = _hermes_root() / "profiles" / agent_key / "a2a" / "vault.yaml"
+    try:
+        raw = _load_yaml_file(agent_vault) or {}
     except Exception:
         return None
     agents = raw.get("agents", {})
-    return agents.get(name.lower()) or agents.get(name)
+    agent_entry = agents.get(agent_key) or agents.get(name)
+    if not agent_entry:
+        return None
+    # Also surface root-level webhook fields if present (not nested under agents[name])
+    return {
+        "a2a_url": agent_entry.get("a2a_url", ""),
+        "auth_token": agent_entry.get("auth_token", ""),
+        "description": agent_entry.get("description", ""),
+        "webhook_url": raw.get("webhook_url", ""),
+        "webhook_secret": raw.get("webhook_secret", ""),
+    }
 
 
 def list_agents() -> list[dict]:
@@ -221,22 +295,34 @@ def list_agents() -> list[dict]:
     Searches: $HERMES_HOME/profiles/*/a2a/vault.yaml → agents[]
     Returns a list of {name, a2a_url, auth_token, description} dicts.
     """
-    home = _hermes_home()
-    profiles_dir = home / "profiles"
+    profiles_dir = _fleet_root() / "a2a" / "agents"
     if not profiles_dir.is_dir():
-        return []
+        profiles_dir = _hermes_root() / "profiles"
+        if not profiles_dir.is_dir():
+            return []
     agents = []
     seen = set()
     for profile_dir in profiles_dir.iterdir():
         if not profile_dir.is_dir():
             continue
-        vault_file = profile_dir / "a2a" / "vault.yaml"
-        if not vault_file.exists():
-            continue
-        import yaml
         try:
-            with open(vault_file) as f:
-                raw = yaml.safe_load(f) or {}
+            raw = _load_yaml_file(profile_dir / "identity.yaml")
+            if raw:
+                agent_name = str(raw.get("name") or profile_dir.name).lower()
+                if agent_name in seen:
+                    continue
+                seen.add(agent_name)
+                agents.append({
+                    "name": agent_name,
+                    "a2a_url": raw.get("a2a_url", ""),
+                    "auth_token": raw.get("auth_token", ""),
+                    "description": raw.get("description", raw.get("role", "")),
+                    "platforms": raw.get("platforms", {}),
+                    "webhook_url": raw.get("webhook_url", ""),
+                    "webhook_secret": raw.get("webhook_secret", ""),
+                })
+                continue
+            raw = _load_yaml_file(profile_dir / "a2a" / "vault.yaml") or {}
         except Exception:
             continue
         for agent_name, agent_data in raw.get("agents", {}).items():

@@ -70,14 +70,14 @@ def _normalize_url(url: str) -> str:
     return (url or "").strip().rstrip("/")
 
 
-def _validate_target_url(url: str) -> str:
+def _validate_target_url(url: str, allow_loopback: bool = False) -> str:
     """Validate and SSRF-protect a target URL."""
     url = _normalize_url(url)
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("A2A URL must be an http(s) URL")
     netloc = parsed.netloc.split(":")[0]
-    if netloc in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+    if not allow_loopback and netloc in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
         raise ValueError("A2A URL cannot point to loopback addresses")
     return url
 
@@ -88,6 +88,16 @@ def _rate_limited(func):
         if not _consume_rate_limit():
             return {"error": f"Rate limit exceeded: max {_RATE_LIMIT_MAX_CALLS} calls per {_RATE_LIMIT_WINDOW}s"}
         return func(*args, **kwargs)
+    return wrapper
+
+
+def _dict_args_handler(func):
+    def wrapper(args=None, **kwargs):
+        if args is None:
+            args = {}
+        if isinstance(args, dict):
+            return func(**args, **kwargs)
+        return func(args, **kwargs)
     return wrapper
 
 
@@ -151,7 +161,7 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_
         target_url = url
 
     try:
-        target_url = _validate_target_url(target_url)
+        target_url = _validate_target_url(target_url, allow_loopback=bool(name))
     except ValueError as e:
         return {"error": str(e)}
 
@@ -355,7 +365,7 @@ def _handle_call_mode3(
         return {"error": f"Agent '{name}' has no a2a_url in vault"}
 
     try:
-        target_url = _validate_target_url(target_url)
+        target_url = _validate_target_url(target_url, allow_loopback=True)
     except ValueError as e:
         return {"error": str(e)}
 
@@ -460,7 +470,7 @@ def handle_call(
         target_url = url
 
     try:
-        target_url = _validate_target_url(target_url)
+        target_url = _validate_target_url(target_url, allow_loopback=bool(name))
     except ValueError as e:
         return {"error": str(e)}
 
@@ -556,54 +566,58 @@ def handle_call(
 # ----------------------------------------------------------------------
 
 
-def handle_telegram(
-    agent: str,
-    message: str,
-    cta: str = "reply",
-    ref: Optional[str] = None,
-    task_id: Optional[str] = None,
-    user_task: Optional[str] = None,
-) -> dict:
+def handle_telegram(args: dict = None, **kwargs) -> dict:
     """Send a fire-and-forget Telegram DM to a mesh peer.
 
-    Resolves the target agent's default_chat_id from the vault registry,
-    and the caller's own bot_token from the caller's vault.
-    Auto-pads mesh header: [a2a][from:<self>][to:<agent>][id:<uuid>][cta:<cta>]
+    Two-part delivery (matching v1/v2 a2a_telegram):
+    1. Echo to Emil via sender's Telegram bot (so Emil sees what was sent)
+    2. Webhook to target agent's relay (so target agent can process the A2A message)
+
+    Routes the message to the target agent's gateway webhook so that the
+    target gateway/config resolves it into the target Telegram session and
+    invokes the target agent. Also echoes the same padded message to the
+    sender's own Telegram DM for operator visibility when sender Telegram
+    credentials are available.
+    Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][cta:<cta>] header.
+    Caller passes raw message; tool handles mesh metadata. No response returned.
+
+    Supports two call conventions:
+    - registry.dispatch(name, {key: val})      → args dict is first positional
+    - registry.dispatch(name, {}, key=val)    → kwargs carry the arguments
     """
+    # Merge args (from positional dict) with kwargs (from **kwargs dispatch).
+    # This covers both registry.dispatch(name, args) and the LLM's
+    # registry.dispatch(name, {}, message=..., agent=...) patterns.
+    merged = dict(args) if args else {}
+    merged.update(kwargs)
+
+    message = merged.get("message", "")
+    agent = merged.get("agent", "")
+    cta = merged.get("cta", "reply")
+    ref = merged.get("ref")
+    task_id = merged.get("task_id")
+    user_task = merged.get("user_task")
+
     if not message:
         return {"error": "'message' is required"}
     if not agent:
         return {"error": "'agent' is required"}
 
-    # Own bot_token: resolve from caller's own vault via VaultResolver
+    # Own bot_token: resolve from caller's own vault via VaultResolver.
+    # This is used only for the non-fatal sender-side visibility echo.
     try:
         own_vault = _vault().resolve()
     except RuntimeError:
-        return {"error": "Cannot resolve own vault — bot_token not available"}
+        own_vault = {}
 
     own_bot_token = own_vault.get("platforms", {}).get("telegram", {}).get("bot_token", "")
-    if not own_bot_token:
-        return {"error": "Own bot_token not available in vault"}
 
-    # Target chat_id: resolve from target agent's vault entry
+    # Target delivery: route to target gateway webhook. The target gateway's
+    # config.yaml owns target_session/deliver_extra and resolves the message
+    # into the target Telegram session.
     target_info = _resolve_agent_by_name(agent)
     if not target_info:
         return {"error": f"Agent '{agent}' not found in vault registry"}
-
-    target_chat_id = target_info.get("platforms", {}).get("telegram", {}).get("default_chat_id", "") if isinstance(target_info, dict) else ""
-    if not target_chat_id:
-        # Fallback: try loading directly from vault.yaml
-        target_vault_path = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "profiles" / agent.lower() / "a2a" / "vault.yaml"
-        if target_vault_path.exists():
-            import yaml
-            try:
-                with open(target_vault_path) as f:
-                    raw = yaml.safe_load(f) or {}
-                target_chat_id = raw.get("platforms", {}).get("telegram", {}).get("default_chat_id", "")
-            except Exception:
-                pass
-    if not target_chat_id:
-        return {"error": f"Agent '{agent}' has no default_chat_id in vault"}
 
     from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
     msg_id = str(uuid.uuid4())[:12]
@@ -612,22 +626,64 @@ def handle_telegram(
         header += f"[ref:{ref}]"
     padded_message = f"{header} {message}"
 
-    from .platforms.telegram import TelegramHandler
-    handler = TelegramHandler()
-    result = handler.send_message(
-        token=own_bot_token,
-        chat_id=str(target_chat_id),
-        text=padded_message,
-        parse_mode="HTML",
-    )
+    # Part 1: Webhook to target agent's gateway relay.
+    target_webhook_url = target_info.get("webhook_url", "") if isinstance(target_info, dict) else ""
+    import hashlib, hmac, json as _json
+    delivery_id = None
+    if target_webhook_url:
+        webhook_secret = target_info.get("webhook_secret", "") if isinstance(target_info, dict) else ""
+        body = _json.dumps({"text": padded_message})
+        sig = hmac.new(
+            webhook_secret.encode(),
+            body.encode(),
+            hashlib.sha256
+        ).hexdigest() if webhook_secret else ""
+        headers = {
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        }
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                target_webhook_url,
+                data=body.encode(),
+                headers=headers,
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = _json.loads(resp.read().decode())
+                delivery_id = result.get("delivery_id", "unknown")
+        except Exception as exc:
+            return {"error": f"Webhook to agent '{agent}' failed: {exc}"}
+    else:
+        return {"error": f"Agent '{agent}' has no webhook_url in vault"}
 
-    if not result.get("ok", False):
-        return {"error": f"Telegram delivery failed: {result.get('error', result)}"}
+    # Part 2: Echo to sender's Telegram DM for visibility.
+    own_telegram_chat_id = own_vault.get("platforms", {}).get("telegram", {}).get("default_chat_id", "")
+    echo_ok = False
+    if own_bot_token and own_telegram_chat_id:
+        from .platforms.telegram import TelegramHandler
+        handler = TelegramHandler()
+        echo_result = handler.send_message(
+            token=own_bot_token,
+            chat_id=str(own_telegram_chat_id),
+            text=padded_message,
+            parse_mode="HTML",
+        )
+        echo_ok = bool(echo_result.get("ok", False))
+        # Non-fatal if echo fails — the webhook delivery is what matters
+        if not echo_ok:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[a2a_telegram] Echo to Emil failed (non-fatal): %s", echo_result
+            )
 
     return {
         "status": "delivered",
-        "message_id": result.get("result", {}).get("message_id"),
+        "message_id": delivery_id,
         "agent": agent,
+        "gateway_delivery": True,
+        "sender_echo": echo_ok,
     }
 
 
@@ -653,25 +709,25 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
 
     registry.register_tool(
         name=schemas.A2A_DISCOVER["name"],
-        toolset="hermes-cli",
+        toolset="a2a",
         schema=schemas.A2A_DISCOVER,
-        handler=handle_discover,
+        handler=_dict_args_handler(handle_discover),
     )
     registry.register_tool(
         name=schemas.A2A_LIST["name"],
-        toolset="hermes-cli",
+        toolset="a2a",
         schema=schemas.A2A_LIST,
-        handler=handle_list,
+        handler=_dict_args_handler(handle_list),
     )
     registry.register_tool(
         name=schemas.A2A_CALL["name"],
-        toolset="hermes-cli",
+        toolset="a2a",
         schema=schemas.A2A_CALL,
-        handler=handle_call,
+        handler=_dict_args_handler(handle_call),
     )
     registry.register_tool(
         name=schemas.A2A_TELEGRAM["name"],
-        toolset="hermes-cli",
+        toolset="a2a",
         schema=schemas.A2A_TELEGRAM,
         handler=handle_telegram,
     )
