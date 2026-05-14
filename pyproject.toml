@@ -12,8 +12,10 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
+  "build>=1",
   "pytest>=8",
   "PyYAML>=6",
+  "twine>=5",
 ]
 
 [project.urls]

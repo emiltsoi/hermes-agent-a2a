@@ -1,5 +1,5 @@
 """A2A tool registration facade."""
 
-from .tool_handlers import register
+from .tool_registry import register
 
 __all__ = ["register"]

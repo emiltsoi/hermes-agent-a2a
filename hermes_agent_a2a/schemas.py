@@ -129,6 +129,10 @@ A2A_CALL = {
                 "type": "string",
                 "description": "The message or task to send to the remote agent",
             },
+            "skill": {
+                "type": "string",
+                "description": "Optional Agent Card skill name/id to target for external A2A agents",
+            },
             "task_id": {
                 "type": "string",
                 "description": "Optional task ID for continuing an existing conversation",

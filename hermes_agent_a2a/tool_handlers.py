@@ -25,6 +25,12 @@ _ensure_server: Optional[callable] = None
 _get_vault_resolver: Optional[callable] = None
 
 
+def set_runtime_callbacks(ensure_server=None, get_vault_resolver=None) -> None:
+    global _ensure_server, _get_vault_resolver
+    _ensure_server = ensure_server
+    _get_vault_resolver = get_vault_resolver
+
+
 def _vault():
     """Lazily get vault resolver."""
     if _get_vault_resolver is not None:
@@ -751,6 +757,7 @@ def handle_send_protocol_task(
     auth_header: Optional[str] = None,
     auth_value: Optional[str] = None,
     message: str = "",
+    skill: Optional[str] = None,
     task_id: Optional[str] = None,
     intent: Optional[str] = None,
     expected_action: Optional[str] = None,
@@ -779,6 +786,15 @@ def handle_send_protocol_task(
         target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
         resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
         allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
+        if skill:
+            known_skills = agent_info.get("metadata", {}).get("skills", []) or agent_info.get("skills", [])
+            skill_names = {
+                str(item.get("name") or item.get("id") or "").lower()
+                for item in known_skills
+                if isinstance(item, dict)
+            }
+            if skill_names and skill.lower() not in skill_names:
+                return {"error": f"Skill '{skill}' not found for agent '{name}'", "available_skills": sorted(skill_names)}
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -816,6 +832,9 @@ def handle_send_protocol_task(
             },
         },
     }
+    if skill:
+        payload["params"]["message"]["metadata"]["skill"] = skill
+        payload["params"]["metadata"] = {"skill": skill}
 
     headers = _auth_headers(resolved_auth)
 

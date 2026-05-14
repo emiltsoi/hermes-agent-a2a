@@ -5,6 +5,7 @@ import yaml
 
 from hermes_agent_a2a import schemas
 from hermes_agent_a2a import tool_handlers as tools
+from hermes_agent_a2a import tool_registry
 from hermes_agent_a2a.identity import resolve_agent
 
 
@@ -19,7 +20,7 @@ class FakeRegistry:
 def test_registers_current_a2a_tools():
     registry = FakeRegistry()
 
-    tools.register(registry)
+    tool_registry.register(registry)
 
     assert set(registry.tools) == {
         "a2a_help",
@@ -109,3 +110,60 @@ def test_schemas_include_external_registration_parameters():
 
     for key in ["register", "register_as", "rpc_url", "auth_token_env", "auth_value_env", "register_overwrite"]:
         assert key in props
+
+
+def test_protocol_polling_working_then_completed(monkeypatch):
+    monkeypatch.setattr(tools.time, "sleep", lambda _: None)
+    responses = [
+        {"result": {"id": "task-1", "status": {"state": "working"}}},
+        {"result": {"id": "task-1", "status": {"state": "completed"}, "artifacts": [{"parts": [{"type": "text", "text": "done"}]}]}},
+    ]
+
+    with patch.object(tools, "_http_request", side_effect=responses) as http:
+        result = tools.handle_send_protocol_task(url="https://external.example/rpc", message="hello", poll_interval=0)
+
+    assert result["state"] == "completed"
+    assert result["response"] == "done"
+    assert http.call_count == 2
+
+
+def test_protocol_json_rpc_error_is_reported():
+    with patch.object(tools, "_http_request", return_value={"error": {"message": "nope"}}):
+        result = tools.handle_send_protocol_task(url="https://external.example/rpc", message="hello")
+
+    assert result["error"] == "Remote agent error: nope"
+
+
+def test_protocol_extracts_status_message_parts():
+    with patch.object(
+        tools,
+        "_http_request",
+        return_value={"result": {"id": "task", "status": {"state": "completed", "message": {"parts": [{"type": "text", "text": "status text"}]}}}},
+    ):
+        result = tools.handle_send_protocol_task(url="https://external.example/rpc", message="hello")
+
+    assert result["response"] == "status text"
+
+
+def test_protocol_skill_metadata_and_validation():
+    agent = {
+        "metadata": {"skills": [{"name": "summarize", "description": "Summarize"}]},
+        "transports": {"a2a_rpc": {"url": "https://external.example/rpc"}},
+    }
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+        tools,
+        "_http_request",
+        return_value={"result": {"id": "task", "status": {"state": "completed"}, "artifacts": [{"parts": [{"type": "text", "text": "ok"}]}]}},
+    ) as http:
+        result = tools.handle_send_protocol_task(name="external", message="hello", skill="summarize")
+
+    assert result["response"] == "ok"
+    payload = http.call_args.kwargs["json_body"]
+    assert payload["params"]["message"]["metadata"]["skill"] == "summarize"
+    assert payload["params"]["metadata"]["skill"] == "summarize"
+
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
+        result = tools.handle_send_protocol_task(name="external", message="hello", skill="translate")
+
+    assert "not found" in result["error"]
+    assert result["available_skills"] == ["summarize"]
