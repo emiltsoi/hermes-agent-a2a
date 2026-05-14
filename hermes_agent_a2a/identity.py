@@ -351,7 +351,6 @@ def resolve_agent(name: str) -> Optional[dict]:
         "auth_token": agent_entry.get("auth_token", ""),
         "description": agent_entry.get("description", ""),
         "webhook_url": raw.get("webhook_url", ""),
-        "webhook_secret": raw.get("webhook_secret", ""),
     }
 
 
@@ -385,7 +384,6 @@ def list_agents() -> list[dict]:
                     "description": raw.get("description", raw.get("role", "")),
                     "platforms": raw.get("platforms", {}),
                     "webhook_url": raw.get("webhook_url", ""),
-                    "webhook_secret": raw.get("webhook_secret", ""),
                     "transports": raw.get("transports", {}),
                 })
                 continue

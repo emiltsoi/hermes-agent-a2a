@@ -384,7 +384,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             status = _ensure_task_queue().get_status(tid)
             result = {"id": tid, "status": {"state": status["state"]}}
             if status.get("response"):
-                result["artifacts"] = [{"parts": [{"type": "text", "text": status["response"]}], "index": 0}]
+                result["artifacts"] = [{"parts": [{"type": "text", "text": filter_outbound(status["response"])}], "index": 0}]
         elif method == "tasks/cancel":
             tid = params.get("id", "")
             from .worker_registry import cancel_worker
