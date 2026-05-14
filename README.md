@@ -274,6 +274,22 @@ Common variables:
 | `A2A_AUTH_TOKEN` | Optional inbound bearer token for this server. |
 | `A2A_REQUIRE_AUTH` | Set `true` to reject unauthenticated inbound requests. |
 
+## Architecture
+
+The A2A plugin runs within the Hermes gateway process:
+
+```
+Hermes Gateway Process
+├── Main gateway loop
+├── A2A Plugin (loaded into gateway)
+│   ├── A2A HTTP Server Thread (handles inbound JSON-RPC requests)
+│   ├── Hooks (pre/post LLM call interception)
+│   └── Tool handlers (outbound A2A operations)
+└── Other gateway components
+```
+
+**Important: Logging is gateway-side, not server-side.** All plugin logging (including A2A server logs) uses the gateway's logger configuration. Log destination (stdout, file, aggregation service) is controlled by the gateway's logging configuration, not by the A2A plugin.
+
 ## Development checks
 
 ```bash

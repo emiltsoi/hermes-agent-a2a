@@ -245,6 +245,14 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
             "Discovery errors usually mean agent_card_path is wrong or the server does not expose an Agent Card.",
             "No text response means the external agent returned a non-standard response shape; inspect raw_result.",
         ],
+        "architecture": [
+            "The A2A plugin runs within the Hermes gateway process, not as a separate service.",
+            "The A2A HTTP server is a background thread within the gateway process.",
+            "Logging is gateway-side: all plugin logging uses the gateway's logger configuration.",
+            "Log destination (stdout, file, aggregation) is controlled by gateway logging config, not the A2A plugin.",
+            "The plugin shares process-wide state via A2ARuntimeState singleton (replaces builtins hack).",
+            "Hooks intercept LLM calls to inject/extract A2A tasks from the gateway's conversation flow.",
+        ],
         "examples": [
             "a2a_discover(name='yoyo')",
             "a2a_send_protocol_task(name='yoyo', message='Review this plan')",
