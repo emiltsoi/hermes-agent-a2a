@@ -12,7 +12,7 @@ from hermes_agent_a2a import tool_handlers as tools
 from hermes_agent_a2a import tool_registry
 from hermes_agent_a2a.a2a_spec import build_hermes_metadata, build_task_cancel_payload, build_task_send_payload, parse_task_result
 from hermes_agent_a2a.identity import resolve_agent
-from hermes_agent_a2a.worker_registry import cancel_worker, register_worker, unregister_worker
+from hermes_agent_a2a.worker_registry import cancel_worker, cleanup_zombie_processes, register_worker, unregister_worker
 
 
 class FakeRegistry:
@@ -346,3 +346,342 @@ def test_worker_registry_cancels_running_process():
 
 def test_worker_registry_returns_false_for_unknown_task():
     assert cancel_worker("missing-task") is False
+
+
+def test_derive_hermes_home_from_root_path(tmp_path, monkeypatch):
+    """Test _derive_hermes_home when HERMES_HOME points to root directory."""
+    hermes_root = tmp_path / ".hermes"
+    hermes_root.mkdir()
+    (hermes_root / "hermes-agent").mkdir()
+    
+    monkeypatch.setenv("HERMES_HOME", str(hermes_root))
+    
+    result = tools._derive_hermes_home()
+    assert result == str(hermes_root)
+
+
+def test_derive_hermes_home_from_profile_path(tmp_path, monkeypatch):
+    """Test _derive_hermes_home when HERMES_HOME points to profile directory."""
+    hermes_root = tmp_path / ".hermes"
+    hermes_root.mkdir()
+    (hermes_root / "hermes-agent").mkdir()
+    profile_path = hermes_root / "profiles" / "agent0"
+    profile_path.mkdir(parents=True)
+    
+    monkeypatch.setenv("HERMES_HOME", str(profile_path))
+    
+    result = tools._derive_hermes_home()
+    assert result == str(hermes_root)
+
+
+def test_derive_hermes_home_fallback_to_default(tmp_path, monkeypatch):
+    """Test _derive_hermes_home falls back to ~/.hermes when validation fails."""
+    # Create a fake HERMES_HOME that doesn't have hermes-agent
+    fake_home = tmp_path / "fake_hermes"
+    fake_home.mkdir()
+    
+    # Create actual ~/.hermes with hermes-agent
+    real_home = tmp_path / "home" / ".hermes"
+    real_home.mkdir(parents=True)
+    (real_home / "hermes-agent").mkdir()
+    
+    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    
+    result = tools._derive_hermes_home()
+    assert result == str(real_home)
+
+
+def test_derive_hermes_home_raises_error_on_invalid_path(tmp_path, monkeypatch):
+    """Test _derive_hermes_home raises ValueError when no valid path exists."""
+    fake_home = tmp_path / "fake_hermes"
+    fake_home.mkdir()
+    
+    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "nonexistent")
+    
+    try:
+        tools._derive_hermes_home()
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "Cannot find Hermes installation" in str(e)
+
+
+def test_validate_agent_webhook_config_valid():
+    """Test _validate_agent_webhook_config with valid configuration."""
+    agent_info = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+                "auth": {"type": "hmac", "secret": "test-secret"},
+            }
+        }
+    }
+    
+    is_valid, error = tools._validate_agent_webhook_config(agent_info)
+    assert is_valid is True
+    assert error == ""
+
+
+def test_validate_agent_webhook_config_missing_url():
+    """Test _validate_agent_webhook_config with missing webhook URL."""
+    agent_info = {
+        "transports": {
+            "hermes_webhook": {
+                "auth": {"type": "hmac", "secret": "test-secret"},
+            }
+        }
+    }
+    
+    is_valid, error = tools._validate_agent_webhook_config(agent_info)
+    assert is_valid is False
+    assert "no hermes_webhook.url" in error.lower()
+
+
+def test_validate_agent_webhook_config_missing_secret():
+    """Test _validate_agent_webhook_config with missing webhook secret."""
+    agent_info = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+            }
+        }
+    }
+    
+    is_valid, error = tools._validate_agent_webhook_config(agent_info)
+    assert is_valid is False
+    assert "no hermes_webhook.secret" in error.lower()
+
+
+def test_validate_agent_webhook_config_empty_secret():
+    """Test _validate_agent_webhook_config with empty webhook secret."""
+    agent_info = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+                "auth": {"type": "hmac", "secret": ""},
+            }
+        }
+    }
+    
+    is_valid, error = tools._validate_agent_webhook_config(agent_info)
+    assert is_valid is False
+    assert "no hermes_webhook.secret" in error.lower()
+
+
+def test_validate_agent_webhook_config_missing_transport():
+    """Test _validate_agent_webhook_config with missing hermes_webhook transport."""
+    agent_info = {
+        "transports": {}
+    }
+    
+    is_valid, error = tools._validate_agent_webhook_config(agent_info)
+    assert is_valid is False
+    assert "no hermes_webhook.url" in error.lower()
+
+
+def test_task_queue_get_task_metadata_pending():
+    """Test TaskQueue.get_task_metadata() for pending tasks."""
+    from hermes_agent_a2a.server import TaskQueue
+    
+    queue = TaskQueue()
+    task_id = "task-1"
+    metadata = {"sender_name": "agent0", "original_text": "test message"}
+    
+    queue.enqueue(task_id, "test text", metadata)
+    
+    result = queue.get_task_metadata(task_id)
+    assert result == metadata
+
+
+def test_task_queue_get_task_metadata_completed():
+    """Test TaskQueue.get_task_metadata() for completed tasks."""
+    from hermes_agent_a2a.server import TaskQueue
+    
+    queue = TaskQueue()
+    task_id = "task-1"
+    metadata = {"sender_name": "agent0", "original_text": "test message"}
+    
+    queue.enqueue(task_id, "test text", metadata)
+    queue.complete(task_id, "response")
+    
+    result = queue.get_task_metadata(task_id)
+    assert result == metadata
+
+
+def test_task_queue_get_task_metadata_nonexistent():
+    """Test TaskQueue.get_task_metadata() for non-existent tasks."""
+    from hermes_agent_a2a.server import TaskQueue
+    
+    queue = TaskQueue()
+    
+    result = queue.get_task_metadata("nonexistent")
+    assert result == {}
+
+
+def test_task_queue_get_all_task_metadata():
+    """Test TaskQueue.get_all_task_metadata() returns all tasks."""
+    from hermes_agent_a2a.server import TaskQueue
+    
+    queue = TaskQueue()
+    metadata1 = {"sender_name": "agent0", "original_text": "message1"}
+    metadata2 = {"sender_name": "agent1", "original_text": "message2"}
+    
+    queue.enqueue("task-1", "text1", metadata1)
+    queue.enqueue("task-2", "text2", metadata2)
+    
+    result = queue.get_all_task_metadata()
+    assert result["task-1"] == metadata1
+    assert result["task-2"] == metadata2
+
+
+def test_task_queue_get_processing_tasks():
+    """Test TaskQueue.get_processing_tasks() returns correct list."""
+    from hermes_agent_a2a.server import TaskQueue
+    
+    queue = TaskQueue()
+    queue.enqueue("task-1", "text1", {})
+    queue.enqueue("task-2", "text2", {})
+    
+    queue.mark_processing("task-1")
+    
+    result = queue.get_processing_tasks()
+    assert result == ["task-1"]
+
+
+def test_task_queue_requeue_tasks():
+    """Test TaskQueue.requeue_tasks() only adds tasks not in pending or processing."""
+    from hermes_agent_a2a.server import TaskQueue
+    
+    queue = TaskQueue()
+    queue.enqueue("task-1", "text1", {})
+    
+    # Try to re-queue a task that's already pending
+    task = queue.drain_pending()[0]
+    queue.requeue_tasks([task])
+    
+    # Should still only have 1 task (not duplicated)
+    assert queue.pending_count() == 1
+    
+    # Mark as processing
+    queue.mark_processing("task-1")
+    
+    # Try to re-queue a task that's processing
+    queue.requeue_tasks([task])
+    
+    # Should still have 1 task (not added back since it's processing)
+    assert queue.pending_count() == 1
+    
+    # Complete the task
+    queue.complete("task-1", "done")
+    
+    # Now re-queue it
+    queue.requeue_tasks([task])
+    
+    # Should have 1 pending task again
+    assert queue.pending_count() == 1
+
+
+def test_cleanup_zombie_processes_removes_finished():
+    """Test cleanup_zombie_processes() removes finished processes."""
+    proc = subprocess.Popen([sys.executable, "-c", "print('done')"])
+    proc.wait()  # Process finishes immediately
+    
+    register_worker("zombie-task", proc)
+    
+    cleaned = cleanup_zombie_processes()
+    assert cleaned == 1
+    
+    # Process should no longer be in registry
+    assert cancel_worker("zombie-task") is False
+
+
+def test_cleanup_zombie_processes_skips_active():
+    """Test cleanup_zombie_processes() doesn't remove active processes."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    
+    register_worker("active-task", proc)
+    
+    cleaned = cleanup_zombie_processes()
+    assert cleaned == 0
+    
+    # Process should still be in registry
+    assert cancel_worker("active-task") is True
+    
+    # Cleanup
+    unregister_worker("active-task")
+    if proc.poll() is None:
+        proc.kill()
+
+
+def test_cleanup_zombie_processes_empty_registry():
+    """Test cleanup_zombie_processes() with empty registry."""
+    cleaned = cleanup_zombie_processes()
+    assert cleaned == 0
+
+
+def test_session_message_rejects_invalid_webhook_config(monkeypatch):
+    """Test handle_send_session_message rejects invalid webhook configuration."""
+    agent = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+                # Missing secret
+            }
+        }
+    }
+    
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
+        result = tools.handle_send_session_message(message="hello", agent="agent1")
+    
+    assert "error" in result
+    assert "webhook configuration invalid" in result["error"].lower()
+
+
+def test_session_message_rejects_missing_webhook_url(monkeypatch):
+    """Test handle_send_session_message rejects missing webhook URL."""
+    agent = {
+        "transports": {
+            "hermes_webhook": {
+                "auth": {"type": "hmac", "secret": "test-secret"},
+            }
+        }
+    }
+    
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
+        result = tools.handle_send_session_message(message="hello", agent="agent1")
+    
+    assert "error" in result
+    assert "webhook configuration invalid" in result["error"].lower()
+
+
+def test_session_message_validates_before_delivery(monkeypatch):
+    """Test handle_send_session_message validates config before attempting delivery."""
+    agent = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+                "auth": {"type": "hmac", "secret": "test-secret"},
+            }
+        }
+    }
+    
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return b'{"delivery_id": "delivery-1"}'
+    
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+        urllib.request, "urlopen", return_value=FakeResponse()
+    ):
+        result = tools.handle_send_session_message(message="hello", agent="agent1")
+    
+    assert result["state"] == "completed"
+    assert result["delivery"] == "delivered"
