@@ -82,6 +82,13 @@ class HermesAgentA2APlugin:
         tools_module.register(registry, _start_a2a_server, _get_vault_resolver)
         logger.info("[HermesA2A] Phase 3 tools registered")
 
+        # Boot-strap identity validation — fail fast if bot_token / default_chat_id are missing or unresolved
+        vault_resolver = _get_vault_resolver()
+        identity = vault_resolver.resolve()
+        from .validators import BootValidator
+        BootValidator(vault_resolver).validate(identity)
+        logger.info("[HermesA2A] BootValidator passed")
+
         # Start A2A server eagerly on plugin load — no need to wait for first tool call
         _start_a2a_server()
 
@@ -91,10 +98,11 @@ class HermesAgentA2APlugin:
     def on_shutdown(self) -> None:
         """Stop the A2A server thread."""
         logger.info("[HermesA2A] shutdown — stopping A2A server thread")
-        from .server import clear_runtime_server, get_runtime_state
+        from .runtime_state import get_runtime_state
+        from .server import clear_runtime_server
         try:
             state = get_runtime_state()
-            server = state.get("server")
+            server = state.get_server()
             if server:
                 clear_runtime_server(server)
                 server.shutdown()

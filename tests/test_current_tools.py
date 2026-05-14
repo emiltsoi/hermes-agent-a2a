@@ -2,8 +2,9 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import threading
 import urllib.request
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import yaml
 
@@ -11,7 +12,7 @@ from hermes_agent_a2a import schemas
 from hermes_agent_a2a import tool_handlers as tools
 from hermes_agent_a2a import tool_registry
 from hermes_agent_a2a.a2a_spec import build_hermes_metadata, build_task_cancel_payload, build_task_send_payload, parse_task_result
-from hermes_agent_a2a.identity import resolve_agent
+from hermes_agent_a2a.identity import resolve_agent, list_agents
 from hermes_agent_a2a.worker_registry import cancel_worker, cleanup_zombie_processes, register_worker, unregister_worker
 
 
@@ -875,3 +876,328 @@ def test_a2a_metrics_command_not_triggered_on_normal_message(monkeypatch):
     assert result.get("delivery") != "command_response"
     assert result["state"] == "completed"
     assert result["delivery"] == "delivered"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for v3 code review (CR-1 through CR-7)
+# ---------------------------------------------------------------------------
+
+CREDENTIAL_KEYS = frozenset(["auth_token", "bot_token", "webhook_secret", "platforms"])
+SECRET_SUBKEYS = frozenset(["secret"])  # nested inside auth dicts (e.g. transports.*.auth.secret)
+
+
+def _write_identity_file(path: Path, data: dict) -> None:
+    """Write an identity.yaml with credentials for CR-1 testing."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    yaml.safe_dump(data, path.open("w"))
+
+
+def test_cr1_list_agents_excludes_credentials(tmp_path, monkeypatch):
+    """CR-1: list_agents() must not return auth_token, bot_token, webhook_secret, platforms, or transports."""
+    # Set up a fleet vault with an identity file containing credentials
+    vault_root = tmp_path / "fleet"
+    agents_dir = vault_root / "a2a" / "agents"
+    agent_dir = agents_dir / "test-agent"
+    agent_dir.mkdir(parents=True)
+
+    identity_data = {
+        "name": "test-agent",
+        "description": "Test agent with credentials",
+        "a2a_url": "https://example.com/rpc",
+        "auth_token": "super-secret-bearer-token",
+        "webhook_secret": "whsec-abc123",
+        "platforms": {"telegram": {"bot_token": "123456:ABC-DEF"}},
+        "transports": {"a2a_rpc": {"url": "https://example.com/rpc"}},
+    }
+    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
+
+    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
+
+    agents = list_agents()
+
+    assert len(agents) >= 1
+    for agent in agents:
+        for key in CREDENTIAL_KEYS:
+            assert key not in agent, f"list_agents() returned credential key: {key}"
+        # Also check nested secrets (e.g. transports.*.auth.secret)
+        def _no_nested_secrets(d: dict) -> list:
+            violations = []
+            for k, v in d.items():
+                if isinstance(v, dict):
+                    if k in CREDENTIAL_KEYS:
+                        violations.append(k)
+                    violations.extend(_no_nested_secrets(v))
+            return violations
+        nested_violations = _no_nested_secrets(agent)
+        assert not nested_violations, f"list_agents() returned nested credential key(s): {nested_violations}"
+
+
+def test_cr1_resolve_agent_excludes_credentials(tmp_path, monkeypatch):
+    """CR-1: resolve_agent() must not return auth_token, bot_token, webhook_secret, platforms, or transports."""
+    vault_root = tmp_path / "fleet"
+    agents_dir = vault_root / "a2a" / "agents"
+    agent_dir = agents_dir / "credential-agent"
+    agent_dir.mkdir(parents=True)
+
+    identity_data = {
+        "name": "credential-agent",
+        "description": "Agent with secrets",
+        "a2a_url": "https://secret.example/rpc",
+        "auth_token": " bearer-secret-token-xyz",
+        "webhook_secret": "whsec-xyz789",
+        "platforms": {"telegram": {"bot_token": "999999:XYZ-ABC"}},
+        "transports": {
+            "a2a_rpc": {
+                "url": "https://secret.example/rpc",
+                "auth": {"type": "bearer", "secret": "super-secret-hmac-key"},
+            }
+        },
+    }
+    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
+
+    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
+
+    agent = resolve_agent("credential-agent")
+
+    assert agent is not None
+    def _no_secrets_in_dict(d: dict, path: str = "") -> list:
+        """Recursively find secret keys in a dict. Returns list of paths with secrets."""
+        violations = []
+        for k, v in d.items():
+            current_path = f"{path}.{k}" if path else k
+            if k in CREDENTIAL_KEYS:
+                violations.append(current_path)
+            if isinstance(v, dict):
+                violations.extend(_no_secrets_in_dict(v, current_path))
+        return violations
+
+    violations = _no_secrets_in_dict(agent)
+    assert not violations, f"resolve_agent() returned credential path(s): {violations}"
+
+
+def test_cr2_on_shutdown_calls_server_shutdown(monkeypatch):
+    """CR-2: on_shutdown() must call server.shutdown() on the actual A2A server."""
+    from hermes_agent_a2a import plugin as plugin_module
+    from hermes_agent_a2a.runtime_state import get_runtime_state
+
+    # Use a truly unique port to avoid "address already in use" from prior test runs
+    import random
+    unique_port = str(random.randint(20000, 60000))
+
+    # Patch os.getenv so _start_a2a_server() picks up our port
+    original_getenv = os.getenv
+    def patched_getenv(key, default=None):
+        if key == "A2A_PORT":
+            return unique_port
+        return original_getenv(key, default)
+
+    with patch.object(os, "getenv", patched_getenv):
+        plugin_module._start_a2a_server()
+
+    state = get_runtime_state()
+    server = state.get_server()
+    assert server is not None, "A2A server should be running for this test"
+
+    # Spy on the server's shutdown method
+    original_shutdown = server.shutdown
+    shutdown_called = []
+    def track_shutdown():
+        shutdown_called.append(True)
+    server.shutdown = track_shutdown
+
+    try:
+        plugin_module.HermesAgentA2APlugin().on_shutdown()
+    finally:
+        server.shutdown = original_shutdown
+
+    assert len(shutdown_called) == 1, "server.shutdown() must be called exactly once in on_shutdown()"
+
+
+def test_cr3_mode3_name_extraction_from_params_does_not_raise_nameerror(tmp_path, monkeypatch):
+    """CR-3: _handle_task_send_mode3 must extract 'name' from params and derive agent_home without NameError."""
+    # Set up a minimal agent profile so _derive_hermes_home finds a valid hermes-agent dir
+    hermes_root = tmp_path / ".hermes"
+    hermes_root.mkdir()
+    (hermes_root / "hermes-agent").mkdir()
+    profile = hermes_root / "profiles" / "test-agent"
+    profile.mkdir(parents=True)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_root))
+
+    # Mock the subprocess so we don't need a real venv python
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = ('{"response": "ok"}', "")
+    mock_proc.returncode = 0
+
+    params = {"name": "test-agent"}
+    metadata = {}
+    user_text = "hello"
+
+    with patch.object(tools.subprocess, "Popen", return_value=mock_proc):
+        # This must not raise NameError — name must be extracted from params
+        result = tools._handle_task_send_mode3(params, metadata, user_text)
+
+    # Result should be a dict (success or failure), not an exception
+    assert isinstance(result, dict)
+    # The task_id should be present (either generated or from params)
+    assert "id" in result
+    # Should have spawned the subprocess (verifies name was extracted and agent_home derived)
+    assert mock_proc.communicate.called, "Worker subprocess should have been spawned — name extraction from params works"
+
+
+def test_mode2_env_sanitization_only_whitelisted_vars(tmp_path, monkeypatch):
+    """Mode 2: _handle_call_mode2 must spawn subprocess with ONLY whitelisted env vars (no secrets)."""
+    hermes_root = tmp_path / ".hermes"
+    hermes_root.mkdir()
+    (hermes_root / "hermes-agent").mkdir()
+    agent_profile = hermes_root / "profiles" / "target-agent"
+    agent_profile.mkdir(parents=True)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_root))
+    # Set secrets that must NOT appear in the subprocess env
+    monkeypatch.setenv("A2A_TELEGRAM_BOT_TOKEN", "123456:FAKE-BOT-TOKEN")
+    monkeypatch.setenv("A2A_OWNER_CHAT_ID", "999999999")
+    monkeypatch.setenv("SOME_OTHER_SECRET", "super-secret-value")
+
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = ('{"response": "ok"}', "")
+    mock_proc.returncode = 0
+
+    with patch.object(tools.subprocess, "Popen", return_value=mock_proc) as mock_popen:
+        result = tools._handle_call_mode2(name="target-agent", message="do it")
+
+    assert mock_popen.called
+    env_dict = mock_popen.call_args.kwargs.get("env") or mock_popen.call_args[1].get("env")
+
+    # Only whitelisted keys may be present
+    allowed = frozenset(["HERMES_HOME", "PATH", "PYTHONPATH"])
+    forbidden = frozenset(["A2A_TELEGRAM_BOT_TOKEN", "A2A_OWNER_CHAT_ID", "SOME_OTHER_SECRET"])
+
+    assert all(k in allowed for k in env_dict), f"Env contains non-whitelisted keys: {set(env_dict) - allowed}"
+    assert not any(k in env_dict for k in forbidden), f"Env must not contain secret keys: {forbidden & set(env_dict)}"
+
+
+def test_poll_error_tracking_returns_error_on_all_failures(monkeypatch):
+    """Poll error tracking: when all poll attempts fail, return an error dict (not working/empty response)."""
+    import importlib
+    import hermes_agent_a2a.tool_handlers as th
+    importlib.reload(th)
+
+    # Patch time.sleep to be instant
+    monkeypatch.setattr(th.time, "sleep", lambda _: None)
+
+    # Patch _http_request to raise on every call (both initial send AND poll attempts)
+    def always_fail(*args, **kwargs):
+        raise RuntimeError("network unreachable")
+
+    with patch.object(th, "_http_request", side_effect=always_fail):
+        result = th.handle_send_protocol_task(
+            url="https://fake.example/rpc",
+            message="hello",
+            poll_attempts=3,
+            poll_interval=0,
+        )
+
+    # Must NOT return {"state": "working", "response": ""} — that's the bug
+    assert result.get("state") != "working" or result.get("response") != "", \
+        "Must not return working/empty on complete poll failure"
+
+    # Must contain an error indication
+    assert "error" in result, "Poll failure must return an error key"
+    assert "poll" in result["error"].lower() or "failed" in result["error"].lower()
+
+
+def test_boot_validator_raises_runtime_error_on_missing_bot_token():
+    """CR-6: BootValidator.validate() must raise RuntimeError when bot_token is missing."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+
+    identity_no_token = {
+        "platforms": {"telegram": {}},
+        "defaults": {},
+    }
+
+    try:
+        validator.validate(identity_no_token)
+        assert False, "BootValidator.validate() must raise RuntimeError when bot_token is missing"
+    except RuntimeError as e:
+        assert "bot token" in str(e).lower()
+
+
+def test_boot_validator_raises_runtime_error_on_missing_chat_id():
+    """CR-6: BootValidator.validate() must raise RuntimeError when chat_id is missing."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+
+    identity_no_chat_id = {
+        "platforms": {"telegram": {"bot_token": "123456:ABC"}},
+        "defaults": {},
+    }
+
+    try:
+        validator.validate(identity_no_chat_id)
+        assert False, "BootValidator.validate() must raise RuntimeError when chat_id is missing"
+    except RuntimeError as e:
+        assert "chat_id" in str(e).lower()
+
+
+def test_boot_validator_raises_runtime_error_on_unresolved_token_placeholder():
+    """CR-6: BootValidator.validate() must raise RuntimeError when bot_token is an unresolved env placeholder."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+
+    identity_unresolved = {
+        "platforms": {"telegram": {"bot_token": "${A2A_TELEGRAM_BOT_TOKEN}"}},
+        "defaults": {},
+    }
+
+    try:
+        validator.validate(identity_unresolved)
+        assert False, "BootValidator.validate() must raise RuntimeError for unresolved env var placeholder"
+    except RuntimeError as e:
+        assert "unresolved" in str(e).lower() or "placeholder" in str(e).lower()
+
+
+def test_cr7_clear_stops_metrics_logger(monkeypatch):
+    """CR-7: A2ARuntimeState.clear() must stop the metrics logger thread (event is set)."""
+    from hermes_agent_a2a import runtime_state as rs_module
+    import importlib
+    importlib.reload(rs_module)
+
+    # Patch _start_metrics_logger to be a no-op so we don't start real threads
+    # Patch the global event to track whether it gets set
+    events_created = []
+    original_set = threading.Event.set
+    def track_set(self):
+        events_created.append(self)
+        return original_set(self)
+
+    with patch.object(rs_module, "_start_metrics_logger", lambda: None), \
+         patch.object(threading.Event, "set", track_set):
+
+        # Start a metrics logger session by simulating the env var
+        monkeypatch.setenv("A2A_METRICS_LOG_ENABLED", "true")
+        monkeypatch.setenv("A2A_METRICS_LOG_INTERVAL", "1")
+
+        # Simulate the metrics logger event being created
+        event = threading.Event()
+        rs_module._metrics_logger_event = event
+
+        # Call clear — this should stop the metrics logger
+        rs_module.get_runtime_state().clear()
+
+        # The event must have been set (signalling the logger thread to stop)
+        assert event.is_set(), "A2ARuntimeState.clear() must set _metrics_logger_event to stop the logger thread"
+

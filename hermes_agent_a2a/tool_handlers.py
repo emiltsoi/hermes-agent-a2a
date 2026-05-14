@@ -654,7 +654,11 @@ def _handle_call_mode2(
         "message": message,
         "timeout": timeout,
     }
-    env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    env = {
+        "HERMES_HOME": hermes_home,
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
 
     proc = None
     try:
@@ -716,6 +720,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
     timeout = int(metadata.get("timeout") or params.get("timeout") or 300)
 
     hermes_home = _derive_hermes_home()
+    name = params.get("name") or metadata.get("agent_name")
     agent_home = os.path.join(hermes_home, "profiles", name.lower())
 
     venv_python = os.environ.get("A2A_VENV_PYTHON", os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"))
@@ -727,7 +732,11 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
         "message": user_text,
         "timeout": timeout,
     }
-    env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    env = {
+        "HERMES_HOME": hermes_home,
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
 
     proc = None
     try:
@@ -950,6 +959,7 @@ def handle_send_protocol_task(
 
             if task_state in ("working", "submitted") and remote_task_id and poll_attempts > 0:
                 poll_payload = build_task_get_payload(remote_task_id)
+                poll_errors = 0
                 for attempt in range(poll_attempts):
                     time.sleep(max(0, poll_interval))
                     try:
@@ -965,7 +975,11 @@ def handle_send_protocol_task(
                         if is_terminal_state(poll_state):
                             break
                     except Exception:
+                        poll_errors += 1
                         continue
+
+                if poll_errors == poll_attempts and not is_terminal_state(task_state):
+                    return {"error": f"All {poll_attempts} poll attempts failed. Could not determine task result."}
 
             parsed = parse_task_result(rpc_result, default_task_id=task_id)
             response_text = parsed["response"]
@@ -1153,6 +1167,10 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         hermes_webhook = _transport(target_info, "hermes_webhook")
         target_webhook_url = hermes_webhook.get("url", "") or (target_info.get("webhook_url", "") if isinstance(target_info, dict) else "")
         if target_webhook_url:
+            try:
+                target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=False)
+            except ValueError as e:
+                return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
             reachability_timeout = int(os.getenv("A2A_WEBHOOK_REACHABILITY_TIMEOUT", "5"))
             is_reachable, reachability_error = _validate_webhook_reachable(target_webhook_url, reachability_timeout)
             if not is_reachable:

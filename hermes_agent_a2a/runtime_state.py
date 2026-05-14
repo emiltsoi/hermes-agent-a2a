@@ -94,8 +94,13 @@ class A2AMetrics:
     def _get_queue_depth(self) -> int:
         try:
             from .runtime_state import get_runtime_state as get_state
-            return get_state().get_task_queue().pending_count()
-        except Exception:
+            queue = get_state().get_task_queue()
+            if queue is None:
+                _logger.warning("[A2A Metrics] Task queue is None during queue depth lookup — state may have been cleared")
+                return 0
+            return queue.pending_count()
+        except Exception as exc:
+            _logger.warning("[A2A Metrics] Could not determine queue depth: %s", exc)
             return 0
 
 
@@ -179,6 +184,9 @@ class A2ARuntimeState:
     
     def clear(self) -> None:
         """Clear all state (for shutdown/reload)."""
+        # Stop the metrics logger before resetting state so the background
+        # thread doesn't hold stale references.
+        _stop_metrics_logger()
         with self._state_lock:
             self._task_queue = None
             self._server = None

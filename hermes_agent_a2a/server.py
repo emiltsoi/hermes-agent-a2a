@@ -66,6 +66,8 @@ class TaskQueue:
     def enqueue(self, task_id: str, text: str, metadata: dict) -> _PendingTask | None:
         task = _PendingTask(task_id, text, metadata)
         with self._lock:
+            if len(self._pending) >= _MAX_PENDING:
+                return None
             if task_id in self._pending:
                 return None
             self._pending[task_id] = task
@@ -77,8 +79,8 @@ class TaskQueue:
         try:
             from .runtime_state import get_runtime_state as get_state
             get_state().get_metrics().record_task_received()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("TaskQueue: metrics unavailable (record_task_received): %s", exc)
         return task
 
     def drain_pending(self, exclude: set[str] | None = None) -> list[_PendingTask]:
@@ -112,8 +114,8 @@ class TaskQueue:
         try:
             from .runtime_state import get_runtime_state as get_state
             get_state().get_metrics().record_task_completed()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("TaskQueue: metrics unavailable (record_task_completed): %s", exc)
 
     def cancel(self, task_id: str) -> None:
         with self._lock:
@@ -127,8 +129,8 @@ class TaskQueue:
         try:
             from .runtime_state import get_runtime_state as get_state
             get_state().get_metrics().record_task_canceled()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("TaskQueue: metrics unavailable (record_task_canceled): %s", exc)
 
     def get_status(self, task_id: str) -> dict:
         with self._lock:
@@ -173,11 +175,11 @@ class TaskQueue:
         return None
 
 
-def get_runtime_state() -> dict:
-    """Expose the process-wide runtime state to the plugin loader.
-    
-    Returns a dict for backward compatibility with existing code that
-    expects the old builtins-based state structure.
+def get_runtime_state_dict() -> dict:
+    """Expose the process-wide runtime state to the plugin loader as a dict.
+
+    Named explicitly as _dict to avoid shadowing runtime_state.get_runtime_state()
+    which returns the A2ARuntimeState singleton.
     """
     from .runtime_state import get_runtime_state as get_state
     return get_state().to_dict()
@@ -220,21 +222,24 @@ def _ensure_task_queue() -> TaskQueue:
     return task_queue
 
 
-def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None):
+def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None, on_failure=None):
     """POST to the internal webhook to trigger an agent turn, with retry.
 
     Args:
         deliver_only: if True, the webhook handler invokes the agent but skips
             Telegram routing (used for peer-originated A2A tasks).
+        on_failure: optional callable invoked with (task_id,) if all retries fail.
     """
     # Make retry logic configurable via environment variables
     if retries is None:
         retries = int(os.getenv("A2A_WEBHOOK_RETRIES", "3"))
     if base_delay is None:
         base_delay = float(os.getenv("A2A_WEBHOOK_BACKOFF", "1.0"))
-    
+
     secret = os.getenv("A2A_WEBHOOK_SECRET", "") or os.getenv("WEBHOOK_SECRET", "")
     if not secret:
+        if on_failure:
+            on_failure(task_id)
         return
 
     port = int(os.getenv("WEBHOOK_PORT", "8644"))
@@ -277,6 +282,25 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
                 logger.debug("[A2A] Webhook trigger failed (attempt %d/%d), retrying in %ds: %s", attempt+1, retries, delay, e)
                 time.sleep(delay)
     logger.warning("[A2A] Webhook trigger failed after %d attempts: %s", retries, last_exc)
+    if on_failure:
+        on_failure(task_id)
+
+
+def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:
+    """Periodically mark tasks older than 2 * _RESPONSE_TIMEOUT as failed."""
+    def run():
+        while True:
+            time.sleep(_RESPONSE_TIMEOUT)
+            cutoff = time.time() - 2 * _RESPONSE_TIMEOUT
+            for task in list(task_queue._pending.values()):
+                if task.created_at < cutoff and task.response is None:
+                    task.response = "(orphaned — no response)"
+                    task.ready.set()
+                    logger.warning("[A2A] Task %s orphaned — marked failed after %.0fs", task.task_id, time.time() - task.created_at)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
 
 
 class A2ARequestHandler(BaseHTTPRequestHandler):
@@ -446,28 +470,35 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         audit.log("task_received", {"task_id": task_id, "length": len(user_text)})
 
-        if _ensure_task_queue().pending_count() >= _MAX_PENDING:
-            return {
-                "id": task_id,
-                "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": "Agent busy — too many pending tasks"}], "index": 0}],
-            }
+        q = _ensure_task_queue()
+        if q.find_task_by_id(task_id) is not None:
+            self._send_json(
+                {"jsonrpc": "2.0", "error": {"code": -32000, "message": "Task ID already in use"}, "id": rpc_id},
+                409,
+            )
+            return
 
-        task = _ensure_task_queue().enqueue(task_id, user_text, metadata)
+        task = q.enqueue(task_id, user_text, metadata)
         if task is None:
-            return {
-                "id": task_id,
-                "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": "Task ID already in use"}], "index": 0}],
-            }
+            self._send_json(
+                {"jsonrpc": "2.0", "error": {"code": -32000, "message": "Agent busy — too many pending tasks"}, "id": rpc_id},
+                503,
+            )
+            return
 
         # Wake up the gateway via internal webhook. deliver_only=True tells
         # the webhook handler to invoke the agent without routing to Telegram.
         # The agent's pre_llm_call hook drains the shared task queue, processes
         # the task, and post_llm_call marks it complete.
+        def _on_webhook_failure(tid: str) -> None:
+            t = _ensure_task_queue().find_task_by_id(tid)
+            if t is not None and t.response is None:
+                t.response = "(webhook delivery failed)"
+                t.ready.set()
+
         threading.Thread(
             target=_trigger_webhook,
-            kwargs={"task_id": task_id, "deliver_only": True},
+            kwargs={"task_id": task_id, "deliver_only": True, "on_failure": _on_webhook_failure},
             daemon=True,
         ).start()
 
@@ -510,6 +541,7 @@ class A2AServer(ThreadingHTTPServer):
                 "and localhost is not safe in containers. Set A2A_REQUIRE_AUTH=true to reject all unauthenticated requests."
             )
         self.limiter = RateLimiter()
+        _start_orphaned_task_watchdog(_ensure_task_queue())
         super().__init__((host, port), A2ARequestHandler)
 
     def build_agent_card(self) -> dict:

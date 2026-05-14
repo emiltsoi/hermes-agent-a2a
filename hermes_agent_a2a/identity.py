@@ -335,7 +335,27 @@ def resolve_agent(name: str) -> Optional[dict]:
     except Exception:
         identity = None
     if identity:
-        return identity
+        # Strip credentials before returning — auth_token, platforms, and auth.secret from transports
+        def _strip_secrets(d: dict) -> dict:
+            result = {}
+            for k, v in d.items():
+                if k == "auth" and isinstance(v, dict) and "secret" in v:
+                    result[k] = {key: val for key, val in v.items() if key != "secret"}
+                elif isinstance(v, dict):
+                    result[k] = _strip_secrets(v)
+                else:
+                    result[k] = v
+            return result
+        stripped = _strip_secrets(identity)
+        result = {
+            "name": stripped.get("name", ""),
+            "a2a_url": stripped.get("a2a_url", ""),
+            "description": stripped.get("description", ""),
+            "role": stripped.get("role", ""),
+        }
+        if "transports" in stripped:
+            result["transports"] = stripped["transports"]
+        return result
     agent_vault = _hermes_root() / "profiles" / agent_key / "a2a" / "vault.yaml"
     try:
         raw = _load_yaml_file(agent_vault) or {}
@@ -348,9 +368,8 @@ def resolve_agent(name: str) -> Optional[dict]:
     # Also surface root-level webhook fields if present (not nested under agents[name])
     return {
         "a2a_url": agent_entry.get("a2a_url", ""),
-        "auth_token": agent_entry.get("auth_token", ""),
         "description": agent_entry.get("description", ""),
-        "webhook_url": raw.get("webhook_url", ""),
+        "role": agent_entry.get("role", ""),
     }
 
 
@@ -358,7 +377,7 @@ def list_agents() -> list[dict]:
     """Return all agents in the vault registry.
 
     Searches: $HERMES_HOME/profiles/*/a2a/vault.yaml → agents[]
-    Returns a list of {name, a2a_url, auth_token, description} dicts.
+    Returns a list of {name, a2a_url, description, role} dicts — no credentials.
     """
     profiles_dir = _fleet_root() / "a2a" / "agents"
     if not profiles_dir.is_dir():
@@ -380,11 +399,8 @@ def list_agents() -> list[dict]:
                 agents.append({
                     "name": agent_name,
                     "a2a_url": raw.get("a2a_url", ""),
-                    "auth_token": raw.get("auth_token", ""),
                     "description": raw.get("description", raw.get("role", "")),
-                    "platforms": raw.get("platforms", {}),
-                    "webhook_url": raw.get("webhook_url", ""),
-                    "transports": raw.get("transports", {}),
+                    "role": raw.get("role", ""),
                 })
                 continue
             raw = _load_yaml_file(profile_dir / "a2a" / "vault.yaml") or {}
@@ -397,7 +413,7 @@ def list_agents() -> list[dict]:
             agents.append({
                 "name": agent_name,
                 "a2a_url": agent_data.get("a2a_url", ""),
-                "auth_token": agent_data.get("auth_token", ""),
                 "description": agent_data.get("description", ""),
+                "role": agent_data.get("role", ""),
             })
     return agents
