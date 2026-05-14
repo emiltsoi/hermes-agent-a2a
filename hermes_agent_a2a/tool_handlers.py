@@ -1209,28 +1209,32 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         return {"error": f"Agent '{agent}' has no webhook_url in vault"}
 
     # Part 2: Echo to sender's Telegram DM for visibility.
-    own_telegram_chat_id = own_vault.get("platforms", {}).get("telegram", {}).get("default_chat_id", "")
-    echo_ok = False
-    if own_bot_token and own_telegram_chat_id:
-        import logging
-        _logger = logging.getLogger(__name__)
-        try:
-            import urllib.request
-            url = f"https://api.telegram.org/bot{own_bot_token}/sendMessage"
-            payload = _json.dumps({
-                "chat_id": str(own_telegram_chat_id),
-                "text": padded_message,
-                "parse_mode": "HTML",
-            }).encode()
-            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                echo_result = _json.loads(resp.read().decode())
-            if echo_result.get("ok"):
-                echo_ok = True
-            else:
-                _logger.warning("[a2a_send_session_message] sender echo failed (non-fatal): %s", echo_result)
-        except Exception as exc:
-            _logger.warning("[a2a_send_session_message] sender echo failed (non-fatal): %s", exc)
+    # Can be disabled via A2A_DISABLE_SENDER_ECHO env var
+    if os.getenv("A2A_DISABLE_SENDER_ECHO", "false").lower() == "true":
+        echo_ok = False
+    else:
+        own_telegram_chat_id = own_vault.get("platforms", {}).get("telegram", {}).get("default_chat_id", "")
+        echo_ok = False
+        if own_bot_token and own_telegram_chat_id:
+            import logging
+            _logger = logging.getLogger(__name__)
+            try:
+                import urllib.request
+                url = f"https://api.telegram.org/bot{own_bot_token}/sendMessage"
+                payload = _json.dumps({
+                    "chat_id": str(own_telegram_chat_id),
+                    "text": padded_message,
+                    "parse_mode": "HTML",
+                }).encode()
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    echo_result = _json.loads(resp.read().decode())
+                if echo_result.get("ok"):
+                    echo_ok = True
+                else:
+                    _logger.warning("[a2a_send_session_message] sender echo failed (non-fatal): %s", echo_result)
+            except Exception as exc:
+                _logger.warning("[a2a_send_session_message] sender echo failed (non-fatal): %s", exc)
 
     return {
         "task_id": task_id,
