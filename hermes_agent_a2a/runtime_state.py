@@ -6,12 +6,18 @@ plugin reloads and provides thread-safe access to shared state.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import time
+import threading
 from threading import Lock
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .server import A2AServer, TaskQueue
+
+_logger = logging.getLogger(__name__)
 
 
 class A2AMetrics:
@@ -203,3 +209,26 @@ def clear_runtime_state() -> None:
     """Clear the runtime state."""
     state = get_runtime_state()
     state.clear()
+
+
+def _start_metrics_logger() -> None:
+    """Start background thread to log metrics periodically."""
+    if os.getenv("A2A_METRICS_LOG_ENABLED", "false").lower() != "true":
+        return
+    
+    log_interval = int(os.getenv("A2A_METRICS_LOG_INTERVAL", "300"))  # 5 minutes default
+    
+    def log_metrics():
+        while True:
+            try:
+                state = get_runtime_state()
+                metrics = state.get_metrics().get_metrics()
+                _logger.info("[A2A Metrics] %s", json.dumps(metrics))
+                time.sleep(log_interval)
+            except Exception as exc:
+                _logger.error("[A2A Metrics] Logger error: %s", exc)
+                time.sleep(log_interval)
+    
+    thread = threading.Thread(target=log_metrics, daemon=True)
+    thread.start()
+    _logger.info("[A2A Metrics] Periodic logging started (interval: %ds)", log_interval)

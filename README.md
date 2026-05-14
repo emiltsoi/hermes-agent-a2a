@@ -276,6 +276,24 @@ Common variables:
 | `A2A_AUTH_TOKEN` | Optional inbound bearer token for this server. |
 | `A2A_REQUIRE_AUTH` | Set `true` to reject unauthenticated inbound requests. |
 
+**Webhook delivery configuration:**
+
+| Variable | Purpose |
+|---|---|
+| `A2A_WEBHOOK_DELIVERY_RETRIES` | Number of retry attempts for failed webhook delivery. Defaults to `3`. |
+| `A2A_WEBHOOK_DELIVERY_BACKOFF` | Base backoff in seconds for exponential backoff. Defaults to `1.0`. |
+| `A2A_WEBHOOK_DELIVERY_TIMEOUT` | HTTP timeout in seconds for webhook delivery. Defaults to `10`. |
+| `A2A_WEBHOOK_REACHABILITY_CHECK` | Set `true` to validate webhook reachability before delivery. Defaults to `false`. |
+| `A2A_WEBHOOK_REACHABILITY_TIMEOUT` | Timeout in seconds for reachability check. Defaults to `5`. |
+| `A2A_DISABLE_SENDER_ECHO` | Set `true` to disable sender-side Telegram echo. Defaults to `false`. |
+
+**Metrics configuration:**
+
+| Variable | Purpose |
+|---|---|
+| `A2A_METRICS_LOG_ENABLED` | Set `true` to enable periodic metrics logging. Defaults to `false`. |
+| `A2A_METRICS_LOG_INTERVAL` | Interval in seconds between metrics log entries. Defaults to `300` (5 minutes). |
+
 ## Architecture
 
 The A2A plugin runs within the Hermes gateway process:

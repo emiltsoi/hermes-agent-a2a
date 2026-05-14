@@ -72,6 +72,7 @@ class HermesAgentA2APlugin:
         """Register tools and hooks. Server starts lazily on first tool call."""
         from . import hooks as hooks_module
         from . import tools as tools_module
+        from .runtime_state import _start_metrics_logger
 
         registry.register_hook("pre_llm_call", hooks_module.pre_llm_call)
         registry.register_hook("post_llm_call", hooks_module.post_llm_call)
@@ -83,6 +84,9 @@ class HermesAgentA2APlugin:
 
         # Start A2A server eagerly on plugin load — no need to wait for first tool call
         _start_a2a_server()
+
+        # Start metrics logger if enabled
+        _start_metrics_logger()
 
     def on_shutdown(self) -> None:
         """Stop the A2A server thread."""
