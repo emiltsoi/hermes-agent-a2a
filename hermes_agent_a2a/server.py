@@ -15,7 +15,6 @@ import os
 import threading
 import time
 import uuid
-import builtins
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from threading import Event, Lock
 from collections import OrderedDict
@@ -32,7 +31,6 @@ DEFAULT_PORT = 8081
 _TASK_CACHE_MAX = 1000
 _MAX_PENDING = 10
 _RESPONSE_TIMEOUT = int(os.getenv("A2A_RESPONSE_TIMEOUT", "120"))  # seconds to wait for agent response
-_STATE_KEY = "_hermes_a2a_runtime_state"
 
 try:
     from hermes_cli import __version__ as HERMES_VERSION
@@ -148,58 +146,51 @@ class TaskQueue:
             return list(self._processing)
 
 
-def _runtime_state() -> dict:
-    """Return process-wide A2A runtime state that survives plugin reloads."""
-    state = getattr(builtins, _STATE_KEY, None)
-    if not isinstance(state, dict):
-        state = {}
-        setattr(builtins, _STATE_KEY, state)
-
-    queue = state.get("task_queue")
-    if not _is_usable_task_queue(queue):
-        state["task_queue"] = TaskQueue()
-    state.setdefault("server", None)
-    state.setdefault("thread", None)
-    state.setdefault("owner_module", __name__)
-    return state
-
-
-def _is_usable_task_queue(queue) -> bool:
-    """Accept queue objects created before plugin reload changed class identity."""
-    return all(
-        callable(getattr(queue, name, None))
-        for name in (
-            "pending_count",
-            "enqueue",
-            "drain_pending",
-            "complete",
-            "cancel",
-            "get_status",
-        )
-    )
-
-
-task_queue = _runtime_state()["task_queue"]
-
-
 def get_runtime_state() -> dict:
-    """Expose the process-wide runtime state to the plugin loader."""
-    return _runtime_state()
+    """Expose the process-wide runtime state to the plugin loader.
+    
+    Returns a dict for backward compatibility with existing code that
+    expects the old builtins-based state structure.
+    """
+    from .runtime_state import get_runtime_state as get_state
+    return get_state().to_dict()
 
 
 def set_runtime_server(server, thread) -> None:
-    state = _runtime_state()
-    state["server"] = server
-    state["thread"] = thread
-    state["owner_module"] = __name__
+    """Set the runtime server and thread in the singleton state."""
+    from .runtime_state import get_runtime_state as get_state
+    state = get_state()
+    state.set_server(server)
+    state.set_thread(thread)
+    state.set_owner_module(__name__)
 
 
-def clear_runtime_server(server=None) -> None:
-    state = _runtime_state()
-    if server is not None and state.get("server") is not server:
-        return
-    state["server"] = None
-    state["thread"] = None
+def clear_runtime_server(server) -> None:
+    """Clear the runtime server from the singleton state."""
+    from .runtime_state import get_runtime_state as get_state
+    state = get_state()
+    if state.get_server() == server:
+        state.set_server(None)
+        state.set_thread(None)
+
+
+# Module-level task queue reference for backward compatibility
+def _get_task_queue() -> TaskQueue:
+    """Get the task queue from the singleton state."""
+    from .runtime_state import get_runtime_state as get_state
+    return get_state().get_task_queue()
+
+
+# Lazy initialization to avoid circular import
+task_queue: TaskQueue = None  # type: ignore
+
+
+def _ensure_task_queue() -> TaskQueue:
+    """Ensure task queue is initialized (called lazily)."""
+    global task_queue
+    if task_queue is None:
+        task_queue = _get_task_queue()
+    return task_queue
 
 
 def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None):
@@ -363,7 +354,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             result = self._handle_task_send(params)
         elif method == "tasks/get":
             tid = params.get("id", "")
-            status = task_queue.get_status(tid)
+            status = _ensure_task_queue().get_status(tid)
             result = {"id": tid, "status": {"state": status["state"]}}
             if status.get("response"):
                 result["artifacts"] = [{"parts": [{"type": "text", "text": status["response"]}], "index": 0}]
@@ -371,7 +362,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             tid = params.get("id", "")
             from .worker_registry import cancel_worker
             worker_canceled = cancel_worker(tid)
-            task_queue.cancel(tid)
+            _ensure_task_queue().cancel(tid)
             result = {"id": tid, "status": {"state": "canceled"}, "metadata": {"hermes": {"worker_canceled": worker_canceled}}}
         else:
             self._send_json({
@@ -428,14 +419,14 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         audit.log("task_received", {"task_id": task_id, "length": len(user_text)})
 
-        if task_queue.pending_count() >= _MAX_PENDING:
+        if _ensure_task_queue().pending_count() >= _MAX_PENDING:
             return {
                 "id": task_id,
                 "status": {"state": "failed"},
                 "artifacts": [{"parts": [{"type": "text", "text": "Agent busy — too many pending tasks"}], "index": 0}],
             }
 
-        task = task_queue.enqueue(task_id, user_text, metadata)
+        task = _ensure_task_queue().enqueue(task_id, user_text, metadata)
         if task is None:
             return {
                 "id": task_id,
@@ -445,7 +436,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         # Wake up the gateway via internal webhook. deliver_only=True tells
         # the webhook handler to invoke the agent without routing to Telegram.
-        # The agent's pre_llm_call hook drains the shared task_queue, processes
+        # The agent's pre_llm_call hook drains the shared task queue, processes
         # the task, and post_llm_call marks it complete.
         threading.Thread(
             target=_trigger_webhook,

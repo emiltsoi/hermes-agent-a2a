@@ -21,9 +21,9 @@ _HERMES_HOME = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
 
 
 def _get_task_queue():
-    """Access the process-wide task queue from the server module."""
-    state = _server_module._runtime_state()
-    return state.get("task_queue")
+    """Access the process-wide task queue from the singleton state."""
+    from .runtime_state import get_runtime_state as get_state
+    return get_state().get_task_queue()
 
 
 def pre_llm_call(conversation_history=None, user_message=None, **kwargs) -> dict:
@@ -84,7 +84,6 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
     # Find the task to complete — use explicit task_id or the oldest processing task
     target_id = task_id
     if not target_id:
-        state = _server_module._runtime_state()
         # Walk processing tasks to find one without an explicit id
         for tid in queue.get_processing_tasks():
             target_id = tid
@@ -95,10 +94,7 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
         logger.info("[A2A hooks] Completed task %s with response length %d", target_id, len(assistant_response))
 
         # Persist the exchange
-        state = _server_module._runtime_state()
-        queue = state.get("task_queue")
-        if queue:
-            meta = queue.get_task_metadata(target_id)
+        meta = queue.get_task_metadata(target_id)
         agent_label = meta.get("sender_name", "a2a_peer")
         try:
             save_exchange(
