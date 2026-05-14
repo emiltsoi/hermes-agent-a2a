@@ -295,6 +295,37 @@ Common variables:
 | `A2A_METRICS_LOG_INTERVAL` | Interval in seconds between metrics log entries. Defaults to `300` (5 minutes). |
 | `A2A_METRICS_COMMAND_ENABLED` | Set `true` to enable `/a2a_metrics` Telegram slash command. Defaults to `false`. |
 
+**Using the `/a2a_metrics` Telegram command:**
+
+To enable the `/a2a_metrics` command, set the environment variable:
+
+```bash
+export A2A_METRICS_COMMAND_ENABLED=true
+```
+
+Then restart the Hermes gateway. Once enabled, send `/a2a_metrics` via Telegram to get formatted metrics:
+
+```
+📊 A2A Metrics
+
+⏱️ Uptime: 1h 30m
+
+🔗 Webhook
+Attempts: 150
+✅ Success: 142 (94.67%)
+❌ Failed: 8
+
+📋 Tasks
+Received: 150
+Completed: 142
+Canceled: 5
+Failed: 3
+
+📬 Queue: 0 pending
+```
+
+The command is detected by the webhook route and returns metrics directly without processing as a normal message.
+
 ## Architecture
 
 The A2A plugin runs within the Hermes gateway process:
