@@ -19,10 +19,11 @@ def main():
 
     # Resolve HERMES_HOME from params or environment — must be explicit for Mode 2.
     # Inherit HERMES_HOME from parent environment if not passed in params.
-    _hermes_agent = params.get("hermes_home") or os.environ.get("HERMES_HOME", "")
-    if not _hermes_agent:
+    _hermes_home = params.get("hermes_home") or os.environ.get("HERMES_HOME", "")
+    if not _hermes_home:
         print("ERROR: hermes_home not set in params or HERMES_HOME env var", file=sys.stderr)
         sys.exit(1)
+    _hermes_agent = os.path.join(_hermes_home, "hermes-agent")
     _plugin_dir = os.path.dirname(os.path.abspath(__file__))
     # Move hermes-agent to front, keep plugin dir at front if present
     new_path = [_hermes_agent]

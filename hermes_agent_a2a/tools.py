@@ -120,7 +120,7 @@ def _transport_auth_value(transport: dict, key: str) -> str:
 # ----------------------------------------------------------------------
 
 
-def _http_request(method: str, url: str, json_body: dict = None, headers: dict = None) -> dict:
+def _http_request(method: str, url: str, json_body: dict = None, headers: dict = None, timeout: int = _DEFAULT_TIMEOUT) -> dict:
     """Synchronous HTTP request using urllib (no asyncio dependency)."""
     import urllib.request
     import urllib.error
@@ -133,7 +133,7 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
     req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
 
     try:
-        with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read(_MAX_RESPONSE_SIZE + 1)
             if len(data) > _MAX_RESPONSE_SIZE:
                 raise RuntimeError(f"Response exceeds {_MAX_RESPONSE_SIZE} bytes")
@@ -142,7 +142,7 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
         raise RuntimeError(f"HTTP {e.code}") from e
     except urllib.error.URLError as e:
         if isinstance(e.reason, (TimeoutError, OSError)) and "timed out" in str(e.reason):
-            raise TimeoutError(f"Timed out after {_DEFAULT_TIMEOUT}s") from e
+            raise TimeoutError(f"Timed out after {timeout}s") from e
         raise ConnectionError(f"Cannot connect: {e.reason}") from e
 
 
@@ -241,7 +241,12 @@ def _handle_call_mode2(
     if not message:
         return {"error": "'message' is required for Mode 2"}
 
-    hermes_home = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+    agent_home_env = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+    hermes_home = os.path.dirname(agent_home_env.rstrip("/"))
+    if hermes_home.endswith("/profiles"):
+        hermes_home = os.path.dirname(hermes_home)
+    if not Path(hermes_home).joinpath("hermes-agent").is_dir():
+        hermes_home = os.path.expanduser("~/.hermes")
     agent_home = os.path.join(hermes_home, "profiles", name.lower())
     if not os.path.isdir(agent_home):
         return {"error": f"Agent profile not found: {agent_home}"}
@@ -290,6 +295,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
     """
     logger.info("[A2A] _handle_task_send_mode3 — spawning local worker")
     task_id = params.get("id", str(uuid.uuid4()))
+    timeout = int(metadata.get("timeout") or params.get("timeout") or 300)
 
     agent_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
     hermes_home = os.path.dirname(agent_home.rstrip("/"))
@@ -308,7 +314,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
         "agent_home": agent_home,
         "hermes_home": hermes_home,
         "message": user_text,
-        "timeout": 300,
+        "timeout": timeout,
     }
     env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
@@ -318,14 +324,14 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
             input=json.dumps(worker_params),
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=timeout,
             env=env,
         )
     except subprocess.TimeoutExpired:
         return {
             "id": task_id,
             "status": {"state": "failed"},
-            "artifacts": [{"parts": [{"type": "text", "text": "Mode 3 worker timed out"}], "index": 0}],
+            "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],
         }
 
     if proc.returncode == 0:
@@ -403,8 +409,10 @@ def _handle_call_mode3(
                     "context_scope": "full",
                     "sender_name": os.getenv("A2A_AGENT_NAME", "hermes-agent"),
                     "worker_at": "target",
+                    "timeout": timeout,
                 },
             },
+            "timeout": timeout,
         },
     }
 
@@ -413,7 +421,7 @@ def _handle_call_mode3(
         headers["Authorization"] = f"Bearer {auth_token}"
 
     try:
-        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers)
+        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout)
     except Exception as exc:
         return {"error": f"Mode 3 HTTP error: {exc}"}
 
@@ -436,7 +444,7 @@ def _handle_call_mode3(
 
 
 # ----------------------------------------------------------------------
-# Tool: call
+# Tool: task
 # ----------------------------------------------------------------------
 
 
@@ -445,7 +453,6 @@ def handle_call(
     name: Optional[str] = None,
     url: Optional[str] = None,
     message: str = "",
-    worker_at: Optional[str] = None,
     task_id: Optional[str] = None,
     intent: Optional[str] = None,
     expected_action: Optional[str] = None,
@@ -453,19 +460,8 @@ def handle_call(
 ) -> dict:
     """Send a task/message to a remote A2A agent.
 
-    Mode 1 (default): POST to target URL, poll for result.
-    Mode 2 (worker_at='caller'): spawn ephemeral worker subprocess locally.
-    Mode 3 (worker_at='target'): POST to target A2A server, worker runs on target.
-
-    Uses VaultResolver.resolve_agent(name) to look up agent URL.
+    Posts to the target A2A RPC URL and polls for result.
     """
-    if worker_at == "caller":
-        return _handle_call_mode2(name=name or "", message=message)
-
-    if worker_at == "target":
-        return _handle_call_mode3(name=name or "", message=message, task_id=task_id)
-
-    # Mode 1 — default queued delivery
     if not message:
         return {"error": "'message' is required"}
     if not url and not name:
@@ -576,6 +572,25 @@ def handle_call(
         "response": response_text or "(no text response)",
         "source": target_url,
     }
+
+
+def handle_run_local_agent_task(
+    name: str = "",
+    message: str = "",
+    timeout: int = 300,
+    user_task: Optional[str] = None,
+) -> dict:
+    return _handle_call_mode2(name=name or "", message=message, timeout=int(timeout or 300))
+
+
+def handle_run_remote_agent_task(
+    name: str = "",
+    message: str = "",
+    task_id: Optional[str] = None,
+    timeout: int = 300,
+    user_task: Optional[str] = None,
+) -> dict:
+    return _handle_call_mode3(name=name or "", message=message, task_id=task_id, timeout=int(timeout or 300))
 
 
 # ----------------------------------------------------------------------
@@ -742,6 +757,18 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         toolset="a2a",
         schema=schemas.A2A_CALL,
         handler=_dict_args_handler(handle_call),
+    )
+    registry.register_tool(
+        name=schemas.A2A_RUN_LOCAL_AGENT_TASK["name"],
+        toolset="a2a",
+        schema=schemas.A2A_RUN_LOCAL_AGENT_TASK,
+        handler=_dict_args_handler(handle_run_local_agent_task),
+    )
+    registry.register_tool(
+        name=schemas.A2A_RUN_REMOTE_AGENT_TASK["name"],
+        toolset="a2a",
+        schema=schemas.A2A_RUN_REMOTE_AGENT_TASK,
+        handler=_dict_args_handler(handle_run_remote_agent_task),
     )
     registry.register_tool(
         name=schemas.A2A_TELEGRAM["name"],

@@ -28,8 +28,7 @@ A2A_CALL = {
     "description": (
         "Send a protocol-level task/message to an A2A-compatible agent over the A2A RPC transport and get its response. "
         "Use a2a_discover first to learn what the agent can do. "
-        "Modes: worker_at=caller (local ephemeral), worker_at=target (remote ephemeral), "
-        "default (queued webhook delivery)."
+        "This does not spawn ephemeral Hermes workers; use a2a_run_local_agent_task or a2a_run_remote_agent_task for those modes."
     ),
     "parameters": {
         "type": "object",
@@ -64,22 +63,64 @@ A2A_CALL = {
                 "enum": ["reply", "forward", "acknowledge"],
                 "description": "What you expect the remote agent to do",
             },
-            "worker_at": {
+        },
+        "required": ["message"],
+    },
+}
+
+A2A_RUN_LOCAL_AGENT_TASK = {
+    "name": "a2a_run_local_agent_task",
+    "description": (
+        "Run a target Hermes agent profile as an ephemeral local worker on the caller machine. "
+        "This bypasses the target A2A HTTP server and requires the target profile to exist on the caller filesystem."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
                 "type": "string",
-                "enum": ["caller", "target"],
-                "description": (
-                    "Where to run the ephemeral worker. "
-                    "'caller' (Mode 2): spawn worker on LOCAL machine, bypass HTTP server. "
-                    "'target' (Mode 3): HTTP POST to remote agent's A2A server, worker runs on TARGET. "
-                    "Omit for default queued delivery (Mode 1 via webhook)."
-                ),
+                "description": "Name of the local target agent profile to run",
+            },
+            "message": {
+                "type": "string",
+                "description": "The task/message to give to the local ephemeral worker",
             },
             "timeout": {
                 "type": "integer",
-                "description": "Timeout in seconds for ephemeral worker modes (default: 300)",
+                "description": "Timeout in seconds for the local worker subprocess (default: 300)",
             },
         },
-        "required": ["message"],
+        "required": ["name", "message"],
+    },
+}
+
+A2A_RUN_REMOTE_AGENT_TASK = {
+    "name": "a2a_run_remote_agent_task",
+    "description": (
+        "Ask a target Hermes agent to run its own ephemeral worker on the remote/target machine over A2A RPC. "
+        "Requires the target to run hermes-agent-a2a and support target-side worker execution."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Name of the target agent from the A2A fleet identity registry",
+            },
+            "message": {
+                "type": "string",
+                "description": "The task/message to give to the remote ephemeral worker",
+            },
+            "task_id": {
+                "type": "string",
+                "description": "Optional task ID for the remote worker request",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds for the remote A2A RPC call and target worker (default: 300)",
+            },
+        },
+        "required": ["name", "message"],
     },
 }
 
