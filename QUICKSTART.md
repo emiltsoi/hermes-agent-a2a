@@ -128,7 +128,7 @@ a2a_run_remote_agent_task(name="agent1", message="Analyze this on your host", ti
 
 `a2a_send_session_message` is a one-way Hermes session relay. The receiving Hermes profile must route inbound webhook text to a configured session/platform in its `config.yaml`.
 
-Example target-profile shape:
+Enable the plugin/toolset in the target profile:
 
 ```yaml
 toolsets:
@@ -137,12 +137,6 @@ toolsets:
 plugins:
   enabled:
     - hermes-agent-a2a
-
-gateway:
-  webhook:
-    enabled: true
-    target_session: default
-    deliver_extra: true
 ```
 
 The target agent identity must also expose a webhook transport:
@@ -183,6 +177,14 @@ platforms:
 ```
 
 Without this routing, the webhook can receive the message but the target Hermes gateway may not deliver it into the desired session.
+
+The receiving Hermes gateway must support authenticated webhook-to-session routing:
+
+- `platforms.webhook.extra.routes.<route>.target_session`
+- webhook source/session override through route `source`
+- allowlist bypass for HMAC-authenticated `webhook:` sources
+
+The A2A plugin owns fleet identity lookup, HMAC signing, A2A envelopes, cancellation, and sender-side Telegram echo. Hermes core should only provide generic webhook/session routing primitives.
 
 ## Troubleshooting
 

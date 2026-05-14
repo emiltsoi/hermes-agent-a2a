@@ -157,7 +157,7 @@ Both worker tools return task-shaped results with Hermes metadata. Local workers
 
 `a2a_send_session_message` is a one-way Hermes session relay. It posts webhook text to the target Hermes agent; the target agent's `config.yaml` must route inbound webhook text into the desired platform/session.
 
-Target profiles need plugin/toolset activation plus gateway webhook/session routing. Exact gateway keys may vary by Hermes version, but the required shape is:
+Target profiles need plugin/toolset activation plus gateway webhook/session routing:
 
 ```yaml
 toolsets:
@@ -166,12 +166,6 @@ toolsets:
 plugins:
   enabled:
     - hermes-agent-a2a
-
-gateway:
-  webhook:
-    enabled: true
-    target_session: default
-    deliver_extra: true
 ```
 
 The target identity also needs a webhook transport so peers know where to deliver:
@@ -212,6 +206,28 @@ platforms:
 ```
 
 Without this routing, `a2a_send_session_message` may reach the webhook but not land in the intended Hermes session. The tool returns `state=completed`, `delivery=delivered`, `reply_expected=false`, and Hermes metadata with `route=session`, `delivery=one_way`. Use `a2a_send_protocol_task` when you need a pollable A2A task result.
+
+### Hermes gateway compatibility
+
+`a2a_send_session_message` currently depends on Hermes gateway support for:
+
+- `platforms.webhook.extra.routes.<route>.target_session` to bind the webhook event to an existing platform session.
+- webhook-sourced session authorization after HMAC validation.
+- webhook source/platform override when routing into another platform session.
+
+The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and sender-side Telegram visibility echo. The gateway should only provide generic authenticated webhook-to-session routing.
+
+### Recommended cleanup path for Hermes core patches
+
+The clean long-term split is:
+
+- Keep generic gateway primitives upstream: authenticated webhook routes, `target_session`, cross-platform delivery, source/session overrides, idempotency, and rate limiting.
+- Rename private/core-facing arguments such as `_platform` to a public `platform_override` or route-level `source.platform`.
+- Replace A2A-specific gateway logic such as `_load_a2a_agents()` and `_deliver_a2a()` with plugin-owned registry and protocol calls.
+- Avoid A2A-specific payload flags in core webhook code. Prefer generic route modes such as `execution: agent_async`, `response_mode: none`, or `delivery: platform_session`.
+- Keep cancellation, A2A JSON-RPC, and fleet identity semantics inside this plugin.
+
+Until those gateway primitives are upstreamed, deployments using session relay need a Hermes build that includes the webhook `target_session` and HMAC-authenticated webhook-session routing behavior shown above.
 
 ## Runtime environment
 
