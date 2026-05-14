@@ -34,6 +34,15 @@ A2A_DISCOVER = {
                 "type": "string",
                 "description": "Base URL of the remote agent (e.g. http://agent:8081)",
             },
+            "auth_token": {
+                "type": "string",
+                "description": "Optional bearer token for direct external A2A URL discovery",
+            },
+            "agent_card_path": {
+                "type": "string",
+                "description": "Optional Agent Card path for external agents (default: /.well-known/agent.json)",
+                "default": "/.well-known/agent.json",
+            },
             "name": {
                 "type": "string",
                 "description": "Name of an agent from the A2A fleet identity registry",
@@ -54,7 +63,11 @@ A2A_CALL = {
         "properties": {
             "url": {
                 "type": "string",
-                "description": "Base URL of the remote agent",
+                "description": "Base URL or JSON-RPC endpoint of the remote A2A agent",
+            },
+            "auth_token": {
+                "type": "string",
+                "description": "Optional bearer token for direct external A2A URL calls",
             },
             "name": {
                 "type": "string",
@@ -81,6 +94,18 @@ A2A_CALL = {
                 "type": "string",
                 "enum": ["reply", "forward", "acknowledge"],
                 "description": "What you expect the remote agent to do",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "HTTP timeout in seconds for send/get requests (default: 120)",
+            },
+            "poll_interval": {
+                "type": "integer",
+                "description": "Seconds between tasks/get polling attempts when the remote task is working (default: 5)",
+            },
+            "poll_attempts": {
+                "type": "integer",
+                "description": "Maximum tasks/get polling attempts when the remote task is working (default: 60)",
             },
         },
         "required": ["message"],

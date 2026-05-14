@@ -86,9 +86,10 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
         ],
         "external_agents": [
             "Start with a2a_discover(url='https://external-agent.example') to fetch the Agent Card.",
-            "Then use a2a_send_protocol_task(url='https://external-agent.example', message='...').",
+            "Then use a2a_send_protocol_task(url='https://external-agent.example', message='...', auth_token='...') when auth is required.",
             "External-agent support should extend the protocol path, not the Hermes worker tools.",
-            "Future work: richer Agent Card skill selection, auth negotiation, streaming, and non-Hermes task states.",
+            "The protocol path supports direct URLs, bearer auth, timeouts, and tasks/get polling controls.",
+            "Future work: richer Agent Card skill selection, auth negotiation beyond bearer tokens, streaming, and non-Hermes task state mapping.",
         ],
         "examples": [
             "a2a_discover(name='yoyo')",
@@ -97,6 +98,7 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
             "a2a_run_remote_agent_task(name='yoyo', message='Think on your own machine', timeout=300)",
             "a2a_send_session_message(agent='yoyo', message='Please reply in your active session')",
             "a2a_discover(url='https://external-agent.example')",
+            "a2a_send_protocol_task(url='https://external-agent.example', message='Hello external A2A', auth_token='...', timeout=30)",
         ],
     }
     return {
@@ -208,7 +210,14 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
 # ----------------------------------------------------------------------
 
 
-def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
+def handle_discover(
+    name: Optional[str] = None,
+    url: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    agent_card_path: str = "/.well-known/agent.json",
+    task_id: Optional[str] = None,
+    user_task: Optional[str] = None,
+) -> dict:
     """Fetch a remote agent's Agent Card by name or direct URL.
 
     Uses VaultResolver.resolve_agent(name) to look up the agent's a2a_url.
@@ -218,7 +227,7 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_
         return {"error": "Provide either 'name' or 'url'"}
 
     target_url = ""
-    auth_token = ""
+    resolved_auth_token = auth_token or ""
 
     if name:
         agent_info = _resolve_agent_by_name(name)
@@ -226,7 +235,7 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_
             return {"error": f"Agent '{name}' not found in vault registry"}
         a2a_rpc = _transport(agent_info, "a2a_rpc")
         target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-        auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
+        resolved_auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -238,11 +247,14 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_
         return {"error": str(e)}
 
     headers = {}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
+    if resolved_auth_token:
+        headers["Authorization"] = f"Bearer {resolved_auth_token}"
 
     try:
-        card = _http_request("GET", f"{target_url.rstrip('/')}/.well-known/agent.json", headers=headers)
+        card_path = agent_card_path or "/.well-known/agent.json"
+        if not card_path.startswith("/"):
+            card_path = "/" + card_path
+        card = _http_request("GET", f"{target_url.rstrip('/')}{card_path}", headers=headers)
     except ConnectionError:
         return {"error": f"Cannot connect to {target_url}"}
     except Exception as e:
@@ -258,6 +270,7 @@ def handle_discover(name: Optional[str] = None, url: Optional[str] = None, task_
             for s in card.get("skills", [])
         ],
         "capabilities": card.get("capabilities", {}),
+        "raw_card": card,
     }
 
 
@@ -505,14 +518,52 @@ def _handle_call_mode3(
 # ----------------------------------------------------------------------
 
 
+def _extract_text_from_parts(parts) -> str:
+    chunks = []
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            text = part.get("text", "")
+            if text:
+                chunks.append(str(text))
+        elif isinstance(part.get("text"), str):
+            chunks.append(part["text"])
+    return "\n".join(chunks).strip()
+
+
+def _extract_a2a_response_text(rpc_result: dict) -> str:
+    chunks = []
+    for artifact in rpc_result.get("artifacts", []) or []:
+        if isinstance(artifact, dict):
+            text = _extract_text_from_parts(artifact.get("parts", []))
+            if text:
+                chunks.append(text)
+    status_message = rpc_result.get("status", {}).get("message", {})
+    if isinstance(status_message, dict):
+        text = _extract_text_from_parts(status_message.get("parts", []))
+        if text:
+            chunks.append(text)
+    direct_message = rpc_result.get("message", {})
+    if isinstance(direct_message, dict):
+        text = _extract_text_from_parts(direct_message.get("parts", []))
+        if text:
+            chunks.append(text)
+    return "\n".join(chunks).strip()
+
+
 @_rate_limited
 def handle_call(
     name: Optional[str] = None,
     url: Optional[str] = None,
+    auth_token: Optional[str] = None,
     message: str = "",
     task_id: Optional[str] = None,
     intent: Optional[str] = None,
     expected_action: Optional[str] = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+    poll_interval: int = _POLL_INTERVAL,
+    poll_attempts: int = _POLL_MAX_ATTEMPTS,
     user_task: Optional[str] = None,
 ) -> dict:
     """Send a task/message to a remote A2A agent.
@@ -525,7 +576,7 @@ def handle_call(
         return {"error": "Provide either 'url' or 'name'"}
 
     target_url = ""
-    auth_token = ""
+    resolved_auth_token = auth_token or ""
 
     if name:
         agent_info = _resolve_agent_by_name(name)
@@ -533,7 +584,7 @@ def handle_call(
             return {"error": f"Agent '{name}' not found in vault registry"}
         a2a_rpc = _transport(agent_info, "a2a_rpc")
         target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-        auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
+        resolved_auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -544,6 +595,9 @@ def handle_call(
     except ValueError as e:
         return {"error": str(e)}
 
+    timeout = int(timeout or _DEFAULT_TIMEOUT)
+    poll_interval = int(poll_interval or _POLL_INTERVAL)
+    poll_attempts = int(poll_attempts or _POLL_MAX_ATTEMPTS)
     task_id = task_id or str(uuid.uuid4())
     tid = str(uuid.uuid4())
     resolved_intent = intent or "consultation"
@@ -569,19 +623,20 @@ def handle_call(
     }
 
     headers = {}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
+    if resolved_auth_token:
+        headers["Authorization"] = f"Bearer {resolved_auth_token}"
 
     response_text = ""
     task_state = "unknown"
     error_msg = ""
+    rpc_result = {}
 
     try:
-        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers)
+        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout)
     except ConnectionError:
         error_msg = f"Cannot connect to {target_url}"
     except TimeoutError:
-        error_msg = f"Remote agent timed out after {_DEFAULT_TIMEOUT}s"
+        error_msg = f"Remote agent timed out after {timeout}s"
     except Exception as e:
         error_msg = f"Call failed: {e}"
     else:
@@ -590,35 +645,35 @@ def handle_call(
             err_msg = rpc_error.get("message", str(rpc_error)) if isinstance(rpc_error, dict) else str(rpc_error)
             error_msg = f"Remote agent error: {err_msg}"
         else:
-            rpc_result = result.get("result", {})
+            rpc_result = result.get("result", {}) or {}
             task_state = rpc_result.get("status", {}).get("state", "unknown")
             remote_task_id = rpc_result.get("id", task_id)
 
-            if task_state == "working" and remote_task_id:
+            if task_state in ("working", "submitted") and remote_task_id and poll_attempts > 0:
                 poll_payload = {
                     "jsonrpc": "2.0",
                     "id": str(uuid.uuid4()),
                     "method": "tasks/get",
                     "params": {"id": remote_task_id},
                 }
-                for attempt in range(_POLL_MAX_ATTEMPTS):
-                    time.sleep(_POLL_INTERVAL)
+                for attempt in range(poll_attempts):
+                    time.sleep(max(0, poll_interval))
                     try:
-                        poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers)
-                        poll_inner = poll_result.get("result", {})
+                        poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers, timeout=timeout)
+                        poll_error = poll_result.get("error")
+                        if poll_error:
+                            continue
+                        poll_inner = poll_result.get("result", {}) or {}
                         poll_state = poll_inner.get("status", {}).get("state", "")
-                        if poll_state in ("completed", "failed", "canceled"):
+                        if poll_state:
                             rpc_result = poll_inner
                             task_state = poll_state
+                        if poll_state in ("completed", "failed", "canceled", "rejected"):
                             break
                     except Exception:
                         continue
 
-            for artifact in rpc_result.get("artifacts", []):
-                for part in artifact.get("parts", []):
-                    if part.get("type") == "text":
-                        response_text += part.get("text", "") + "\n"
-            response_text = response_text.strip()
+            response_text = _extract_a2a_response_text(rpc_result)
 
     if error_msg:
         return {"error": error_msg}
@@ -628,8 +683,8 @@ def handle_call(
         "state": task_state,
         "response": response_text or "(no text response)",
         "source": target_url,
+        "raw_result": rpc_result,
     }
-
 
 def handle_run_local_agent_task(
     name: str = "",
