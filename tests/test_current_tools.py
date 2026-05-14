@@ -686,3 +686,122 @@ def test_session_message_validates_before_delivery(monkeypatch):
     
     assert result["state"] == "completed"
     assert result["delivery"] == "delivered"
+
+
+def test_a2a_metrics_initial_state():
+    """Test A2AMetrics initializes with zero values."""
+    from hermes_agent_a2a.runtime_state import A2AMetrics
+    
+    metrics = A2AMetrics()
+    metrics_dict = metrics.get_metrics()
+    
+    assert metrics_dict["uptime_seconds"] >= 0
+    assert metrics_dict["webhook"]["attempts"] == 0
+    assert metrics_dict["webhook"]["successes"] == 0
+    assert metrics_dict["webhook"]["failures"] == 0
+    assert metrics_dict["webhook"]["success_rate_percent"] == 0
+    assert metrics_dict["tasks"]["received"] == 0
+    assert metrics_dict["tasks"]["completed"] == 0
+    assert metrics_dict["tasks"]["canceled"] == 0
+    assert metrics_dict["tasks"]["failed"] == 0
+    assert metrics_dict["queue"]["pending_count"] == 0
+
+
+def test_a2a_metrics_webhook_recording():
+    """Test webhook metrics recording."""
+    from hermes_agent_a2a.runtime_state import A2AMetrics
+    
+    metrics = A2AMetrics()
+    
+    metrics.record_webhook_attempt()
+    metrics.record_webhook_success()
+    
+    metrics_dict = metrics.get_metrics()
+    assert metrics_dict["webhook"]["attempts"] == 1
+    assert metrics_dict["webhook"]["successes"] == 1
+    assert metrics_dict["webhook"]["failures"] == 0
+    assert metrics_dict["webhook"]["success_rate_percent"] == 100.0
+    
+    metrics.record_webhook_attempt()
+    metrics.record_webhook_failure()
+    
+    metrics_dict = metrics.get_metrics()
+    assert metrics_dict["webhook"]["attempts"] == 2
+    assert metrics_dict["webhook"]["successes"] == 1
+    assert metrics_dict["webhook"]["failures"] == 1
+    assert metrics_dict["webhook"]["success_rate_percent"] == 50.0
+
+
+def test_a2a_metrics_task_recording():
+    """Test task metrics recording."""
+    from hermes_agent_a2a.runtime_state import A2AMetrics
+    
+    metrics = A2AMetrics()
+    
+    metrics.record_task_received()
+    metrics.record_task_completed()
+    
+    metrics_dict = metrics.get_metrics()
+    assert metrics_dict["tasks"]["received"] == 1
+    assert metrics_dict["tasks"]["completed"] == 1
+    assert metrics_dict["tasks"]["canceled"] == 0
+    assert metrics_dict["tasks"]["failed"] == 0
+    
+    metrics.record_task_received()
+    metrics.record_task_canceled()
+    metrics.record_task_received()
+    metrics.record_task_failed()
+    
+    metrics_dict = metrics.get_metrics()
+    assert metrics_dict["tasks"]["received"] == 3
+    assert metrics_dict["tasks"]["completed"] == 1
+    assert metrics_dict["tasks"]["canceled"] == 1
+    assert metrics_dict["tasks"]["failed"] == 1
+
+
+def test_a2a_metrics_thread_safety():
+    """Test metrics recording is thread-safe."""
+    from hermes_agent_a2a.runtime_state import A2AMetrics
+    import threading
+    
+    metrics = A2AMetrics()
+    
+    def record_attempts():
+        for _ in range(100):
+            metrics.record_webhook_attempt()
+            metrics.record_webhook_success()
+    
+    threads = [threading.Thread(target=record_attempts) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    
+    metrics_dict = metrics.get_metrics()
+    assert metrics_dict["webhook"]["attempts"] == 1000
+    assert metrics_dict["webhook"]["successes"] == 1000
+
+
+def test_a2a_get_metrics_tool():
+    """Test a2a_get_metrics tool returns metrics from runtime state."""
+    from hermes_agent_a2a.runtime_state import get_runtime_state
+    
+    state = get_runtime_state()
+    metrics = state.get_metrics()
+    
+    # Record some metrics
+    metrics.record_webhook_attempt()
+    metrics.record_webhook_success()
+    metrics.record_task_received()
+    metrics.record_task_completed()
+    
+    result = tools.handle_get_metrics()
+    
+    assert "uptime_seconds" in result
+    assert "webhook" in result
+    assert "tasks" in result
+    assert "queue" in result
+    assert result["webhook"]["attempts"] >= 1
+    assert result["webhook"]["successes"] >= 1
+    assert result["tasks"]["received"] >= 1
+    assert result["tasks"]["completed"] >= 1
