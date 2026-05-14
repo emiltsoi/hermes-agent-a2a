@@ -171,23 +171,23 @@ A2A_CALL = {
 A2A_CANCEL_PROTOCOL_TASK = {
     "name": "a2a_cancel_protocol_task",
     "description": (
-        "Cancel an A2A protocol task by sending JSON-RPC tasks/cancel to a named registry agent or direct URL. "
-        "This is the standard protocol cancellation path and may also cancel Hermes remote workers when the target supports it."
+        "Cancel an A2A task. With name/url it sends JSON-RPC tasks/cancel to a remote agent; "
+        "without name/url it attempts local Hermes worker cancellation by task_id."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "name": {
                 "type": "string",
-                "description": "Name of an agent from the A2A fleet identity registry",
+                "description": "Optional name of an agent from the A2A fleet identity registry for remote cancellation",
             },
             "url": {
                 "type": "string",
-                "description": "Base URL or JSON-RPC endpoint of the remote A2A agent",
+                "description": "Optional base URL or JSON-RPC endpoint of the remote A2A agent for remote cancellation",
             },
             "task_id": {
                 "type": "string",
-                "description": "Task ID to cancel",
+                "description": "Task ID to cancel locally and/or remotely",
             },
             "auth_token": {
                 "type": "string",

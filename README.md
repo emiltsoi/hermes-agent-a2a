@@ -29,6 +29,8 @@ The plugin registers the `a2a` toolset with these tools:
 
 `a2a_send_session_message` is intentionally one-way: it delivers into the target Hermes session/gateway and returns an A2A-shaped delivery ACK, not a semantic reply. Use `a2a_send_protocol_task` when you need a pollable A2A task response.
 
+`a2a_cancel_protocol_task` sends standard A2A `tasks/cancel` when `name` or `url` is provided. If called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess.
+
 ## Install
 
 ### Clone into Hermes plugins

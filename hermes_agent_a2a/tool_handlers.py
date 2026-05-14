@@ -923,11 +923,8 @@ def handle_cancel_protocol_task(
     if not task_id:
         return {"error": "'task_id' is required"}
 
-    # Always attempt local cancellation first — handles local Mode 2 workers
-    # that are registered in worker_registry even when no remote target exists.
     local_canceled = cancel_worker(task_id)
 
-    # If no remote target provided, return local result only.
     if not url and not name:
         return {
             "task_id": task_id,
@@ -954,7 +951,7 @@ def handle_cancel_protocol_task(
     try:
         target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
     except ValueError as e:
-        return {"error": str(e)}
+        return {"error": str(e), "task_id": task_id, "local_canceled": local_canceled}
 
     try:
         result = _http_request(
@@ -965,17 +962,18 @@ def handle_cancel_protocol_task(
             timeout=int(timeout or _DEFAULT_TIMEOUT),
         )
     except Exception as exc:
-        return {"error": f"Cancel failed: {exc}"}
+        return {"error": f"Cancel failed: {exc}", "task_id": task_id, "local_canceled": local_canceled}
 
     err_msg = parse_json_rpc_error(result)
     if err_msg:
-        return {"error": f"Remote agent error: {err_msg}"}
+        return {"error": f"Remote agent error: {err_msg}", "task_id": task_id, "local_canceled": local_canceled}
     parsed = parse_task_result(result.get("result", {}) or {}, default_task_id=task_id)
     return {
         "task_id": parsed["task_id"],
         "state": parsed["state"],
         "response": parsed["response"] or "(no text response)",
         "source": target_url,
+        "local_canceled": local_canceled,
         "raw_result": parsed["raw_result"],
     }
 

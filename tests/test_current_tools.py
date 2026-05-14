@@ -180,16 +180,18 @@ def test_cancel_protocol_task_posts_tasks_cancel():
         tools,
         "_http_request",
         return_value={"result": {"id": "task-1", "status": {"state": "canceled"}}},
-    ), patch("hermes_agent_a2a.tool_handlers.cancel_worker", return_value=False) as mock_cancel:
+    ) as http, patch("hermes_agent_a2a.tool_handlers.cancel_worker", return_value=False) as mock_cancel:
         result = tools.handle_cancel_protocol_task(url="https://external.example/rpc", task_id="task-1")
 
     assert result["state"] == "canceled"
+    assert result["local_canceled"] is False
     mock_cancel.assert_called_once_with("task-1")
+    payload = http.call_args.kwargs["json_body"]
+    assert payload["method"] == "tasks/cancel"
+    assert payload["params"]["id"] == "task-1"
 
 
 def test_cancel_protocol_task_local_only_no_remote():
-    # When no url/name is provided, cancel_protocol_task attempts local cancellation
-    # and returns without making a remote call.
     with patch("hermes_agent_a2a.tool_handlers.cancel_worker", return_value=True) as mock_cancel:
         result = tools.handle_cancel_protocol_task(task_id="local-task-1")
 
