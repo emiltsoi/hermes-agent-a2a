@@ -153,6 +153,37 @@ a2a_run_remote_agent_task(name="agent1", message="Work on your host", timeout=30
 
 Both worker tools return task-shaped results with Hermes metadata. Local workers use `route=worker`, `execution=local_subprocess`, and `isolation=local_profile`; remote workers use `execution=remote_subprocess` and `isolation=target_profile`.
 
+## List registered agents
+
+Use `a2a_list` to see all configured agents in the fleet registry:
+
+```text
+a2a_list()
+```
+
+Returns agent names, URLs, and descriptions. This is useful for verifying which external agents are available for protocol tasks.
+
+## Cancel tasks
+
+Use `a2a_cancel_protocol_task` to cancel running tasks:
+
+For remote A2A agents:
+
+```text
+a2a_cancel_protocol_task(
+  name="external-demo",
+  task_id="task-123"
+)
+```
+
+For local Hermes worker subprocesses:
+
+```text
+a2a_cancel_protocol_task(task_id="local-task-123")
+```
+
+When called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess. When `name` or `url` is provided, it also sends a standard A2A `tasks/cancel` to the remote agent. The result includes `local_canceled` indicating whether local cancellation succeeded.
+
 ## Hermes session routing requirement
 
 `a2a_send_session_message` is a one-way Hermes session relay. It posts webhook text to the target Hermes agent; the target agent's `config.yaml` must route inbound webhook text into the desired platform/session.
