@@ -38,6 +38,19 @@ A2A_DISCOVER = {
                 "type": "string",
                 "description": "Optional bearer token for direct external A2A URL discovery",
             },
+            "auth_type": {
+                "type": "string",
+                "enum": ["none", "bearer", "api_key", "custom_header"],
+                "description": "Optional auth mode for direct external A2A URL discovery",
+            },
+            "auth_header": {
+                "type": "string",
+                "description": "Header name for api_key/custom_header auth",
+            },
+            "auth_value": {
+                "type": "string",
+                "description": "Secret value for api_key/custom_header auth",
+            },
             "agent_card_path": {
                 "type": "string",
                 "description": "Optional Agent Card path for external agents (default: /.well-known/agent.json)",
@@ -68,6 +81,19 @@ A2A_CALL = {
             "auth_token": {
                 "type": "string",
                 "description": "Optional bearer token for direct external A2A URL calls",
+            },
+            "auth_type": {
+                "type": "string",
+                "enum": ["none", "bearer", "api_key", "custom_header"],
+                "description": "Optional auth mode for direct external A2A URL calls",
+            },
+            "auth_header": {
+                "type": "string",
+                "description": "Header name for api_key/custom_header auth",
+            },
+            "auth_value": {
+                "type": "string",
+                "description": "Secret value for api_key/custom_header auth",
             },
             "name": {
                 "type": "string",

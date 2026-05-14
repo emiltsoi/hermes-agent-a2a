@@ -77,6 +77,9 @@ def _normalize_identity(raw: dict) -> dict:
     hermes_webhook = transports.get("hermes_webhook")
     if not isinstance(hermes_webhook, dict):
         hermes_webhook = {}
+    agent_card = transports.get("agent_card")
+    if not isinstance(agent_card, dict):
+        agent_card = {}
     if not a2a_rpc.get("url") and data.get("a2a_url"):
         a2a_rpc["url"] = data.get("a2a_url")
     if not a2a_rpc.get("protocol"):
@@ -107,6 +110,10 @@ def _normalize_identity(raw: dict) -> dict:
         webhook_auth = hermes_webhook.get("auth") or {}
         if not data.get("webhook_secret"):
             data["webhook_secret"] = webhook_auth.get("secret", "")
+    if agent_card.get("url"):
+        if not agent_card.get("auth"):
+            agent_card["auth"] = a2a_rpc.get("auth") or {"type": "none"}
+        transports["agent_card"] = agent_card
     if transports:
         data["transports"] = transports
     if "defaults" not in data:
@@ -139,10 +146,14 @@ def _load_yaml_file(path: Path) -> Optional[dict]:
                 auth["token"] = _resolve_env(auth["token"])
             if "secret" in auth:
                 auth["secret"] = _resolve_env(auth["secret"])
+            if "value" in auth:
+                auth["value"] = _resolve_env(auth["value"])
             if auth.get("token_env") and not auth.get("token"):
                 auth["token"] = os.environ.get(auth["token_env"], "")
             if auth.get("secret_env") and not auth.get("secret"):
                 auth["secret"] = os.environ.get(auth["secret_env"], "")
+            if auth.get("value_env") and not auth.get("value"):
+                auth["value"] = os.environ.get(auth["value_env"], "")
     data = _normalize_identity(data)
     platforms = data.get("platforms", {})
     for platform, cfg in platforms.items():

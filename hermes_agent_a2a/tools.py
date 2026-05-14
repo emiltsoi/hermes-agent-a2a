@@ -86,9 +86,9 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
         ],
         "external_agents": [
             "Start with a2a_discover(url='https://external-agent.example') to fetch the Agent Card.",
-            "Then use a2a_send_protocol_task(url='https://external-agent.example', message='...', auth_token='...') when auth is required.",
+            "Then use a2a_send_protocol_task(url='https://external-agent.example', message='...', auth_token='...') when bearer auth is required.",
             "External-agent support should extend the protocol path, not the Hermes worker tools.",
-            "The protocol path supports direct URLs, bearer auth, timeouts, and tasks/get polling controls.",
+            "The protocol path supports direct URLs, bearer/api-key/custom-header auth, timeouts, and tasks/get polling controls.",
             "Future work: richer Agent Card skill selection, auth negotiation beyond bearer tokens, streaming, and non-Hermes task state mapping.",
         ],
         "external_requirements": [
@@ -101,6 +101,7 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
             "Ask for task state behavior: submitted, working, completed, failed, canceled, rejected, or custom states.",
             "Ask for timeout, polling, rate-limit, and maximum payload/response-size expectations.",
             "Ask whether responses return text in artifacts.parts, status.message.parts, message.parts, or a custom field.",
+            "For named external agents, store transports.a2a_rpc.url/auth and optional transports.agent_card.url/path/auth in identity.yaml.",
             "After receiving the Agent Card URL, call a2a_discover(url='...', auth_token='...') and inspect raw_card.",
         ],
         "examples": [
@@ -186,6 +187,33 @@ def _transport_auth_value(transport: dict, key: str) -> str:
     return auth.get(key, "") or ""
 
 
+def _auth_headers(auth: Optional[dict] = None) -> dict:
+    if not isinstance(auth, dict):
+        return {}
+    auth_type = str(auth.get("type") or "none").lower()
+    if auth_type in ("none", ""):
+        return {}
+    if auth_type == "bearer":
+        token = auth.get("token") or auth.get("value") or ""
+        return {"Authorization": f"Bearer {token}"} if token else {}
+    if auth_type in ("api_key", "custom_header"):
+        header = auth.get("header") or auth.get("name") or ""
+        value = auth.get("value") or auth.get("token") or ""
+        return {header: value} if header and value else {}
+    return {}
+
+
+def _direct_auth(auth_token: Optional[str] = None, auth_type: Optional[str] = None, auth_header: Optional[str] = None, auth_value: Optional[str] = None) -> dict:
+    if auth_type or auth_header or auth_value:
+        return {
+            "type": auth_type or ("custom_header" if auth_header else "bearer"),
+            "header": auth_header or "",
+            "value": auth_value or auth_token or "",
+            "token": auth_token or auth_value or "",
+        }
+    return {"type": "bearer", "token": auth_token} if auth_token else {"type": "none"}
+
+
 # ----------------------------------------------------------------------
 # HTTP helper
 # ----------------------------------------------------------------------
@@ -226,6 +254,9 @@ def handle_discover(
     name: Optional[str] = None,
     url: Optional[str] = None,
     auth_token: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    auth_header: Optional[str] = None,
+    auth_value: Optional[str] = None,
     agent_card_path: str = "/.well-known/agent.json",
     task_id: Optional[str] = None,
     user_task: Optional[str] = None,
@@ -239,15 +270,17 @@ def handle_discover(
         return {"error": "Provide either 'name' or 'url'"}
 
     target_url = ""
-    resolved_auth_token = auth_token or ""
+    resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
 
     if name:
         agent_info = _resolve_agent_by_name(name)
         if not agent_info:
             return {"error": f"Agent '{name}' not found in vault registry"}
         a2a_rpc = _transport(agent_info, "a2a_rpc")
-        target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-        resolved_auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
+        agent_card = _transport(agent_info, "agent_card")
+        target_url = agent_card.get("url", "") or a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
+        resolved_auth = agent_card.get("auth") or a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
+        agent_card_path = agent_card.get("path", agent_card_path)
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -258,9 +291,7 @@ def handle_discover(
     except ValueError as e:
         return {"error": str(e)}
 
-    headers = {}
-    if resolved_auth_token:
-        headers["Authorization"] = f"Bearer {resolved_auth_token}"
+    headers = _auth_headers(resolved_auth)
 
     try:
         card_path = agent_card_path or "/.well-known/agent.json"
@@ -569,6 +600,9 @@ def handle_call(
     name: Optional[str] = None,
     url: Optional[str] = None,
     auth_token: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    auth_header: Optional[str] = None,
+    auth_value: Optional[str] = None,
     message: str = "",
     task_id: Optional[str] = None,
     intent: Optional[str] = None,
@@ -588,7 +622,7 @@ def handle_call(
         return {"error": "Provide either 'url' or 'name'"}
 
     target_url = ""
-    resolved_auth_token = auth_token or ""
+    resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
 
     if name:
         agent_info = _resolve_agent_by_name(name)
@@ -596,7 +630,7 @@ def handle_call(
             return {"error": f"Agent '{name}' not found in vault registry"}
         a2a_rpc = _transport(agent_info, "a2a_rpc")
         target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-        resolved_auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
+        resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -634,9 +668,7 @@ def handle_call(
         },
     }
 
-    headers = {}
-    if resolved_auth_token:
-        headers["Authorization"] = f"Bearer {resolved_auth_token}"
+    headers = _auth_headers(resolved_auth)
 
     response_text = ""
     task_state = "unknown"
