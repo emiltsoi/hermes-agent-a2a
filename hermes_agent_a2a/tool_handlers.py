@@ -64,12 +64,73 @@ def _fleet_agents_root() -> Path:
     from .identity import _fleet_root
     return _fleet_root() / "a2a" / "agents"
 
-_DEFAULT_TIMEOUT = 120
-_POLL_INTERVAL = 5
-_POLL_MAX_ATTEMPTS = 60
-_MAX_RESPONSE_SIZE = 100_000
-_RATE_LIMIT_WINDOW = 60
-_RATE_LIMIT_MAX_CALLS = 30
+
+def _derive_hermes_home() -> str:
+    """Derive the Hermes root directory from HERMES_HOME or sensible defaults.
+    
+    Handles both profile paths (e.g., ~/.hermes/profiles/agent0) and root paths
+    (e.g., ~/.hermes). Validates that the derived path contains expected structure.
+    
+    Returns:
+        Absolute path to Hermes root directory.
+    
+    Raises:
+        ValueError: If derived path doesn't contain expected structure.
+    """
+    # Start with HERMES_HOME env var or default
+    hermes_home = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+    hermes_home = os.path.abspath(hermes_home)
+    
+    # If path ends with /profiles, strip it to get the root
+    if hermes_home.endswith("/profiles"):
+        hermes_home = os.path.dirname(hermes_home)
+    
+    # If path is inside a profiles subdir, go up to root
+    if "/profiles/" in hermes_home:
+        hermes_home = hermes_home.split("/profiles/")[0]
+    
+    # Validate the derived path contains expected structure
+    hermes_agent_path = os.path.join(hermes_home, "hermes-agent")
+    if not Path(hermes_agent_path).is_dir():
+        # Fall back to standard ~/.hermes if validation fails
+        fallback = str(Path.home() / ".hermes")
+        if Path(os.path.join(fallback, "hermes-agent")).is_dir():
+            return fallback
+        raise ValueError(
+            f"Cannot find Hermes installation at {hermes_home} or {fallback}. "
+            f"Set HERMES_HOME to the correct root directory."
+        )
+    
+    return hermes_home
+
+
+def _validate_agent_webhook_config(agent_info: dict) -> tuple[bool, str]:
+    """Validate that an agent has required webhook configuration for session relay.
+    
+    Args:
+        agent_info: Agent identity dictionary from vault.
+    
+    Returns:
+        Tuple of (is_valid, error_message).
+    """
+    hermes_webhook = _transport(agent_info, "hermes_webhook")
+    webhook_url = hermes_webhook.get("url", "")
+    webhook_secret = _transport_auth_value(hermes_webhook, "secret")
+    
+    if not webhook_url:
+        return False, f"Agent has no hermes_webhook.url configured"
+    
+    if not webhook_secret:
+        return False, f"Agent has no hermes_webhook.secret configured - HMAC signature required"
+    
+    return True, ""
+
+_DEFAULT_TIMEOUT = int(os.getenv("A2A_DEFAULT_TIMEOUT", "120"))
+_POLL_INTERVAL = int(os.getenv("A2A_POLL_INTERVAL", "5"))
+_POLL_MAX_ATTEMPTS = int(os.getenv("A2A_POLL_MAX_ATTEMPTS", "60"))
+_MAX_RESPONSE_SIZE = int(os.getenv("A2A_MAX_RESPONSE_SIZE", "100000"))
+_RATE_LIMIT_WINDOW = int(os.getenv("A2A_RATE_LIMIT_WINDOW", "60"))
+_RATE_LIMIT_MAX_CALLS = int(os.getenv("A2A_RATE_LIMIT_MAX_CALLS", "30"))
 
 _call_timestamps: deque[float] = deque()
 _rate_lock = threading.Lock()
@@ -536,17 +597,12 @@ def _handle_call_mode2(
     )
     envelope["params"]["timeout"] = timeout
 
-    agent_home_env = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
-    hermes_home = os.path.dirname(agent_home_env.rstrip("/"))
-    if hermes_home.endswith("/profiles"):
-        hermes_home = os.path.dirname(hermes_home)
-    if not Path(hermes_home).joinpath("hermes-agent").is_dir():
-        hermes_home = os.path.expanduser("~/.hermes")
+    hermes_home = _derive_hermes_home()
     agent_home = os.path.join(hermes_home, "profiles", name.lower())
     if not os.path.isdir(agent_home):
         return {"error": f"Agent profile not found: {agent_home}"}
 
-    venv_python = os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python")
+    venv_python = os.environ.get("A2A_VENV_PYTHON", os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"))
     worker_script = str(Path(__file__).parent / "_mode2_worker.py")
     plugin_dir = str(Path(__file__).parent)
     params = {
@@ -576,6 +632,8 @@ def _handle_call_mode2(
         return {"error": f"Mode 2 worker timed out after {timeout}s"}
     finally:
         unregister_worker(task_id)
+        from .worker_registry import cleanup_zombie_processes
+        cleanup_zombie_processes()
         if proc and proc.poll() is None:
             proc.wait()  # ensure process is reaped
 
@@ -614,17 +672,10 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
     task_id = params.get("id", str(uuid.uuid4()))
     timeout = int(metadata.get("timeout") or params.get("timeout") or 300)
 
-    agent_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
-    hermes_home = os.path.dirname(agent_home.rstrip("/"))
-    if hermes_home.endswith("/profiles"):
-        hermes_home = os.path.dirname(hermes_home)
-    # If the derived hermes_home doesn't have a hermes-agent subdirectory, the
-    # derived path was wrong (HERMES_HOME pointed to a subdir, not the root).
-    # Fall back to os.path.expanduser("~/.hermes") which is the standard fleet root.
-    if not Path(hermes_home).joinpath("hermes-agent").is_dir():
-        hermes_home = os.path.expanduser("~/.hermes")
+    hermes_home = _derive_hermes_home()
+    agent_home = os.path.join(hermes_home, "profiles", name.lower())
 
-    venv_python = os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python")
+    venv_python = os.environ.get("A2A_VENV_PYTHON", os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"))
     worker_script = str(Path(__file__).parent / "_mode2_worker.py")
     plugin_dir = str(Path(__file__).parent)
     worker_params = {
@@ -658,6 +709,8 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
         }
     finally:
         unregister_worker(task_id)
+        from .worker_registry import cleanup_zombie_processes
+        cleanup_zombie_processes()
 
     if proc.returncode == 0:
         try:
@@ -1036,6 +1089,11 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     if not target_info:
         return {"error": f"Agent '{agent}' not found in vault registry"}
 
+    # Validate webhook configuration before attempting delivery
+    is_valid, validation_error = _validate_agent_webhook_config(target_info)
+    if not is_valid:
+        return {"error": f"Agent '{agent}' webhook configuration invalid: {validation_error}"}
+
     from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
     task_id = task_id or str(uuid.uuid4())
     msg_id = task_id[:12]
@@ -1060,12 +1118,14 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     delivery_id = None
     if target_webhook_url:
         webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (target_info.get("webhook_secret", "") if isinstance(target_info, dict) else "")
+        if not webhook_secret:
+            return {"error": f"Agent '{agent}' has no webhook_secret configured - HMAC signature required for secure delivery"}
         body = _json.dumps({"text": padded_message})
         sig = hmac.new(
             webhook_secret.encode(),
             body.encode(),
             hashlib.sha256
-        ).hexdigest() if webhook_secret else ""
+        ).hexdigest()
         headers = {
             "Content-Type": "application/json",
             "X-Hub-Signature-256": f"sha256={sig}",

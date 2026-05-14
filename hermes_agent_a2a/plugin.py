@@ -22,7 +22,7 @@ __version__ = _get_version()
 _server_process = None
 
 
-def _ensure_a2a_server() -> None:
+def _start_a2a_server() -> None:
     """Start A2A HTTP server as a daemon thread inside the gateway process.
 
     Both the server thread and the gateway hooks share builtins._hermes_a2a_runtime_state,
@@ -31,6 +31,15 @@ def _ensure_a2a_server() -> None:
     global _server_process
     if _server_process is not None and _server_process.is_alive():
         return  # already running
+
+    # Verify worker script exists before starting server
+    from pathlib import Path
+    worker_script = Path(__file__).parent / "_mode2_worker.py"
+    if not worker_script.exists():
+        raise RuntimeError(
+            f"Required worker script not found: {worker_script}. "
+            "Please ensure the plugin is installed correctly."
+        )
 
     from .server import A2AServer, set_runtime_server
 
@@ -69,11 +78,11 @@ class HermesAgentA2APlugin:
         registry.register_hook("pre_gateway_dispatch", hooks_module.pre_gateway_dispatch)
         logger.info("[HermesA2A] Phase 2 hooks registered")
 
-        tools_module.register(registry, _ensure_a2a_server, _get_vault_resolver)
+        tools_module.register(registry, _start_a2a_server, _get_vault_resolver)
         logger.info("[HermesA2A] Phase 3 tools registered")
 
         # Start A2A server eagerly on plugin load — no need to wait for first tool call
-        _ensure_a2a_server()
+        _start_a2a_server()
 
     def on_shutdown(self) -> None:
         """Stop the A2A server thread."""

@@ -31,7 +31,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8081
 _TASK_CACHE_MAX = 1000
 _MAX_PENDING = 10
-_RESPONSE_TIMEOUT = 120  # seconds to wait for agent response
+_RESPONSE_TIMEOUT = int(os.getenv("A2A_RESPONSE_TIMEOUT", "120"))  # seconds to wait for agent response
 _STATE_KEY = "_hermes_a2a_runtime_state"
 
 try:
@@ -82,6 +82,13 @@ class TaskQueue:
             skip = set(exclude or ()) | self._processing
             return [t for t in self._pending.values() if t.task_id not in skip]
 
+    def requeue_tasks(self, tasks: list[_PendingTask]) -> None:
+        """Re-queue tasks that were drained but not processed."""
+        with self._lock:
+            for task in tasks:
+                if task.task_id not in self._pending and task.task_id not in self._processing:
+                    self._pending[task.task_id] = task
+
     def mark_processing(self, task_id: str) -> None:
         with self._lock:
             if task_id in self._pending:
@@ -117,6 +124,28 @@ class TaskQueue:
                     return {"state": "canceled"}
                 return {"state": "completed", "response": filter_outbound(task.response)}
         return {"state": "unknown"}
+
+    def get_task_metadata(self, task_id: str) -> dict:
+        """Get metadata for a task by ID (public API for hooks)."""
+        with self._lock:
+            if task_id in self._pending:
+                return getattr(self._pending[task_id], "metadata", {})
+            if task_id in self._completed:
+                return getattr(self._completed[task_id], "metadata", {})
+        return {}
+
+    def get_all_task_metadata(self) -> dict[str, dict]:
+        """Get metadata for all pending and completed tasks (public API for hooks)."""
+        with self._lock:
+            result = {}
+            for task in list(self._pending.values()) + list(self._completed.values()):
+                result[task.task_id] = getattr(task, "metadata", {})
+            return result
+
+    def get_processing_tasks(self) -> list[str]:
+        """Get list of currently processing task IDs (public API for hooks)."""
+        with self._lock:
+            return list(self._processing)
 
 
 def _runtime_state() -> dict:
@@ -173,13 +202,19 @@ def clear_runtime_server(server=None) -> None:
     state["thread"] = None
 
 
-def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=3, base_delay=1.0):
+def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None):
     """POST to the internal webhook to trigger an agent turn, with retry.
 
     Args:
         deliver_only: if True, the webhook handler invokes the agent but skips
             Telegram routing (used for peer-originated A2A tasks).
     """
+    # Make retry logic configurable via environment variables
+    if retries is None:
+        retries = int(os.getenv("A2A_WEBHOOK_RETRIES", "3"))
+    if base_delay is None:
+        base_delay = float(os.getenv("A2A_WEBHOOK_BACKOFF", "1.0"))
+    
     secret = os.getenv("A2A_WEBHOOK_SECRET", "") or os.getenv("WEBHOOK_SECRET", "")
     if not secret:
         return

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from threading import Lock
 
 _lock = Lock()
@@ -31,3 +32,21 @@ def cancel_worker(task_id: str, timeout: float = 3.0) -> bool:
         process.kill()
         process.wait(timeout=timeout)
     return True
+
+
+def cleanup_zombie_processes() -> int:
+    """Remove finished processes from the registry to prevent memory leaks.
+    
+    Returns:
+        Number of zombie processes cleaned up.
+    """
+    cleaned = 0
+    with _lock:
+        zombie_ids = [
+            task_id for task_id, proc in _processes.items()
+            if proc.poll() is not None
+        ]
+        for task_id in zombie_ids:
+            _processes.pop(task_id, None)
+            cleaned += 1
+    return cleaned

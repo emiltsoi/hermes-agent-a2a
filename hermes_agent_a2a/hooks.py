@@ -53,6 +53,10 @@ def pre_llm_call(conversation_history=None, user_message=None, **kwargs) -> dict
 
     queue.mark_processing(task_id)
 
+    # Re-queue any additional tasks that weren't processed
+    if len(pending) > 1:
+        queue.requeue_tasks(pending[1:])
+
     context = (
         f"[A2A trigger]<{task_id}>|<{sender}>|{task_text}\n"
         "Use the tools above to respond to this inbound A2A task."
@@ -82,7 +86,7 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
     if not target_id:
         state = _server_module._runtime_state()
         # Walk processing tasks to find one without an explicit id
-        for tid in list(getattr(queue, "_processing", [])):
+        for tid in queue.get_processing_tasks():
             target_id = tid
             break
 
@@ -92,11 +96,9 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
 
         # Persist the exchange
         state = _server_module._runtime_state()
-        pending = {t.task_id: t for t in list(state.get("task_queue")._pending.values()) +
-                                        list(state.get("task_queue")._completed.values())}
-        meta = {}
-        if target_id in pending:
-            meta = getattr(pending[target_id], "metadata", {})
+        queue = state.get("task_queue")
+        if queue:
+            meta = queue.get_task_metadata(target_id)
         agent_label = meta.get("sender_name", "a2a_peer")
         try:
             save_exchange(
@@ -111,8 +113,7 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
             logger.debug("Failed to persist A2A exchange: %s", exc)
     else:
         # No specific task — complete the oldest processing task
-        state = _server_module._runtime_state()
-        processing = list(state.get("task_queue")._processing)
+        processing = queue.get_processing_tasks()
         if processing:
             tid = processing[0]
             queue.complete(tid, assistant_response)
