@@ -181,6 +181,7 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
         "a2a_run_local_agent_task": "Run a target Hermes profile as an ephemeral worker on the caller machine.",
         "a2a_run_remote_agent_task": "Ask a target Hermes agent to spawn an ephemeral worker on the target machine.",
         "a2a_send_session_message": "Send through a target Hermes gateway into its configured platform/session context.",
+        "a2a_get_metrics": "Get current A2A plugin metrics (uptime, webhook stats, task counts, queue depth).",
     }
     guidance = {
         "overview": [
@@ -1191,8 +1192,13 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         import logging
         _logger = logging.getLogger(__name__)
         
+        # Get metrics instance for recording
+        from .runtime_state import get_runtime_state as get_state
+        metrics = get_state().get_metrics()
+        
         for attempt in range(delivery_retries):
             try:
+                metrics.record_webhook_attempt()
                 req = urllib.request.Request(
                     target_webhook_url,
                     data=body.encode(),
@@ -1202,6 +1208,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                 with urllib.request.urlopen(req, timeout=delivery_timeout) as resp:
                     result = _json.loads(resp.read().decode())
                     delivery_id = result.get("delivery_id", "unknown")
+                metrics.record_webhook_success()
                 if attempt > 0:
                     _logger.info("[a2a_send_session_message] Webhook delivery succeeded on attempt %d/%d", attempt + 1, delivery_retries)
                 break
@@ -1211,6 +1218,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                     _logger.warning("[a2a_send_session_message] Webhook delivery attempt %d/%d failed: %s, retrying in %.1fs", attempt + 1, delivery_retries, exc, backoff)
                     time.sleep(backoff)
                 else:
+                    metrics.record_webhook_failure()
                     _logger.error("[a2a_send_session_message] Webhook delivery failed after %d attempts: %s", delivery_retries, exc)
                     return {"error": f"Webhook to agent '{agent}' failed after {delivery_retries} attempts: {exc}"}
     else:
@@ -1259,3 +1267,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     }
 
 
+def handle_get_metrics() -> dict:
+    """Get current A2A plugin metrics."""
+    from .runtime_state import get_runtime_state as get_state
+    return get_state().get_metrics().get_metrics()

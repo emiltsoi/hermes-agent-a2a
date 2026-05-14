@@ -6,11 +6,89 @@ plugin reloads and provides thread-safe access to shared state.
 
 from __future__ import annotations
 
+import time
 from threading import Lock
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .server import A2AServer, TaskQueue
+
+
+class A2AMetrics:
+    """Thread-safe metrics collector for A2A operations."""
+    
+    def __init__(self):
+        self._lock = Lock()
+        self._webhook_attempts = 0
+        self._webhook_successes = 0
+        self._webhook_failures = 0
+        self._tasks_received = 0
+        self._tasks_completed = 0
+        self._tasks_canceled = 0
+        self._tasks_failed = 0
+        self._start_time = time.time()
+    
+    def record_webhook_attempt(self) -> None:
+        with self._lock:
+            self._webhook_attempts += 1
+    
+    def record_webhook_success(self) -> None:
+        with self._lock:
+            self._webhook_successes += 1
+    
+    def record_webhook_failure(self) -> None:
+        with self._lock:
+            self._webhook_failures += 1
+    
+    def record_task_received(self) -> None:
+        with self._lock:
+            self._tasks_received += 1
+    
+    def record_task_completed(self) -> None:
+        with self._lock:
+            self._tasks_completed += 1
+    
+    def record_task_canceled(self) -> None:
+        with self._lock:
+            self._tasks_canceled += 1
+    
+    def record_task_failed(self) -> None:
+        with self._lock:
+            self._tasks_failed += 1
+    
+    def get_metrics(self) -> dict:
+        with self._lock:
+            uptime = time.time() - self._start_time
+            webhook_success_rate = (
+                self._webhook_successes / self._webhook_attempts * 100
+                if self._webhook_attempts > 0 else 0
+            )
+            queue_depth = self._get_queue_depth()
+            return {
+                "uptime_seconds": round(uptime, 2),
+                "webhook": {
+                    "attempts": self._webhook_attempts,
+                    "successes": self._webhook_successes,
+                    "failures": self._webhook_failures,
+                    "success_rate_percent": round(webhook_success_rate, 2),
+                },
+                "tasks": {
+                    "received": self._tasks_received,
+                    "completed": self._tasks_completed,
+                    "canceled": self._tasks_canceled,
+                    "failed": self._tasks_failed,
+                },
+                "queue": {
+                    "pending_count": queue_depth,
+                },
+            }
+    
+    def _get_queue_depth(self) -> int:
+        try:
+            from .runtime_state import get_runtime_state as get_state
+            return get_state().get_task_queue().pending_count()
+        except Exception:
+            return 0
 
 
 class A2ARuntimeState:
@@ -45,6 +123,7 @@ class A2ARuntimeState:
         self._server: Optional["A2AServer"] = None
         self._thread: Optional[object] = None  # Thread object
         self._owner_module: str = __name__
+        self._metrics = A2AMetrics()
         self._initialized = True
     
     def get_task_queue(self) -> "TaskQueue":
@@ -107,6 +186,11 @@ class A2ARuntimeState:
                 "thread": self._thread,
                 "owner_module": self._owner_module,
             }
+    
+    def get_metrics(self) -> A2AMetrics:
+        """Get the metrics instance."""
+        with self._state_lock:
+            return self._metrics
 
 
 # Convenience functions for backward compatibility

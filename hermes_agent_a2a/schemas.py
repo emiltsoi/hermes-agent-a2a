@@ -11,7 +11,7 @@ A2A_HELP = {
         "properties": {
             "topic": {
                 "type": "string",
-                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "external_requirements", "register_external", "security", "troubleshooting", "examples"],
+                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "external_requirements", "register_external", "security", "troubleshooting", "examples", "architecture"],
                 "description": "Optional help topic to focus on",
                 "default": "overview",
             },
@@ -319,5 +319,17 @@ A2A_TELEGRAM = {
             },
         },
         "required": ["message", "agent"],
+    },
+}
+
+A2A_GET_METRICS = {
+    "name": "a2a_get_metrics",
+    "description": (
+        "Get current A2A plugin metrics including uptime, webhook delivery statistics, "
+        "task counts, and queue depth. Useful for monitoring plugin health and performance."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
     },
 }

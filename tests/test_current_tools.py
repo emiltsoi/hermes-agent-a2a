@@ -37,6 +37,7 @@ def test_registers_current_a2a_tools():
         "a2a_run_local_agent_task",
         "a2a_run_remote_agent_task",
         "a2a_send_session_message",
+        "a2a_get_metrics",
     }
     assert all(entry["toolset"] == "a2a" for entry in registry.tools.values())
 

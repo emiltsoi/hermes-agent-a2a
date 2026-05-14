@@ -73,6 +73,12 @@ class TaskQueue:
                 _, old = self._pending.popitem(last=False)
                 old.response = "(dropped — queue overflow)"
                 old.ready.set()
+        # Record task received metric
+        try:
+            from .runtime_state import get_runtime_state as get_state
+            get_state().get_metrics().record_task_received()
+        except Exception:
+            pass
         return task
 
     def drain_pending(self, exclude: set[str] | None = None) -> list[_PendingTask]:
@@ -102,6 +108,12 @@ class TaskQueue:
                 self._completed[task_id] = task
                 while len(self._completed) > _TASK_CACHE_MAX:
                     self._completed.popitem(last=False)
+        # Record task completed metric
+        try:
+            from .runtime_state import get_runtime_state as get_state
+            get_state().get_metrics().record_task_completed()
+        except Exception:
+            pass
 
     def cancel(self, task_id: str) -> None:
         with self._lock:
@@ -111,6 +123,12 @@ class TaskQueue:
                 task.response = "(canceled)"
                 task.ready.set()
                 self._completed[task_id] = task
+        # Record task canceled metric
+        try:
+            from .runtime_state import get_runtime_state as get_state
+            get_state().get_metrics().record_task_canceled()
+        except Exception:
+            pass
 
     def get_status(self, task_id: str) -> dict:
         with self._lock:

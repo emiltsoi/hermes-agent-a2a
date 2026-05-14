@@ -7,6 +7,7 @@ from .tool_handlers import (
     _dict_args_handler,
     handle_cancel_protocol_task,
     handle_discover,
+    handle_get_metrics,
     handle_list,
     handle_run_local_agent_task,
     handle_run_remote_agent_task,
@@ -68,6 +69,12 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         toolset="a2a",
         schema=schemas.A2A_TELEGRAM,
         handler=handle_send_session_message,
+    )
+    registry.register_tool(
+        name=schemas.A2A_GET_METRICS["name"],
+        toolset="a2a",
+        schema=schemas.A2A_GET_METRICS,
+        handler=handle_get_metrics,
     )
     logger.info("[A2A] Phase 3 tools registered")
 
