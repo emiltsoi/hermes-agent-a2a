@@ -24,11 +24,11 @@ A2A_DISCOVER = {
 }
 
 A2A_CALL = {
-    "name": "a2a_send_task",
+    "name": "a2a_send_protocol_task",
     "description": (
         "Send a protocol-level task/message to an A2A-compatible agent over the A2A RPC transport and get its response. "
         "Use a2a_discover first to learn what the agent can do. "
-        "This does not spawn ephemeral Hermes workers; use a2a_run_local_agent_task or a2a_run_remote_agent_task for those modes."
+        "This is the actual A2A protocol task path. It does not spawn ephemeral Hermes workers; use a2a_run_local_agent_task or a2a_run_remote_agent_task for those modes."
     ),
     "parameters": {
         "type": "object",
