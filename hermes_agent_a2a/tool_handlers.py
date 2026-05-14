@@ -1125,23 +1125,22 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
     own_bot_token = own_vault.get("platforms", {}).get("telegram", {}).get("bot_token", "")
 
-    # Check for /a2a_metrics command (Telegram slash command)
-    if os.getenv("A2A_METRICS_COMMAND_ENABLED", "false").lower() == "true":
-        stripped_message = message.strip()
-        if stripped_message.startswith("/a2a_metrics"):
-            from .runtime_state import get_runtime_state as get_state
-            metrics = get_state().get_metrics().get_metrics()
-            return {
-                "state": "completed",
-                "response": _format_metrics_for_telegram(metrics),
-                "delivery": "command_response",
-            }
-
     # Target delivery: route to target gateway webhook. The target gateway's
     # config.yaml owns target_session/deliver_extra and resolves the message
     # into the target Telegram session.
     target_info = _resolve_agent_by_name(agent)
     if not target_info:
+        # Agent not found - check if it's a /a2a_metrics command for local handling
+        if os.getenv("A2A_METRICS_COMMAND_ENABLED", "false").lower() == "true":
+            stripped_message = message.strip()
+            if stripped_message.startswith("/a2a_metrics"):
+                from .runtime_state import get_runtime_state as get_state
+                metrics = get_state().get_metrics().get_metrics()
+                return {
+                    "state": "completed",
+                    "response": _format_metrics_for_telegram(metrics),
+                    "delivery": "command_response",
+                }
         return {"error": f"Agent '{agent}' not found in vault registry"}
 
     # Validate webhook configuration before attempting delivery
@@ -1210,7 +1209,6 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         
         for attempt in range(delivery_retries):
             try:
-                metrics.record_webhook_attempt()
                 req = urllib.request.Request(
                     target_webhook_url,
                     data=body.encode(),
@@ -1220,7 +1218,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                 with urllib.request.urlopen(req, timeout=delivery_timeout) as resp:
                     result = _json.loads(resp.read().decode())
                     delivery_id = result.get("delivery_id", "unknown")
-                metrics.record_webhook_success()
+                metrics.record_webhook_attempt_and_success()
                 if attempt > 0:
                     _logger.info("[a2a_send_session_message] Webhook delivery succeeded on attempt %d/%d", attempt + 1, delivery_retries)
                 break
@@ -1290,15 +1288,16 @@ def _format_metrics_for_telegram(metrics: dict) -> str:
     uptime = metrics.get("uptime_seconds", 0)
     uptime_hours = int(uptime // 3600)
     uptime_mins = int((uptime % 3600) // 60)
-    
+    uptime_secs = int(uptime % 60)
+
     webhook = metrics.get("webhook", {})
     tasks = metrics.get("tasks", {})
     queue = metrics.get("queue", {})
-    
+
     lines = [
         "📊 A2A Metrics",
         "",
-        f"⏱️ Uptime: {uptime_hours}h {uptime_mins}m",
+        f"⏱️ Uptime: {uptime_hours}h {uptime_mins}m {uptime_secs}s",
         "",
         "🔗 Webhook",
         f"Attempts: {webhook.get('attempts', 0)}",

@@ -745,18 +745,15 @@ def test_a2a_metrics_task_recording():
     assert metrics_dict["tasks"]["received"] == 1
     assert metrics_dict["tasks"]["completed"] == 1
     assert metrics_dict["tasks"]["canceled"] == 0
-    assert metrics_dict["tasks"]["failed"] == 0
     
     metrics.record_task_received()
     metrics.record_task_canceled()
     metrics.record_task_received()
-    metrics.record_task_failed()
     
     metrics_dict = metrics.get_metrics()
     assert metrics_dict["tasks"]["received"] == 3
     assert metrics_dict["tasks"]["completed"] == 1
     assert metrics_dict["tasks"]["canceled"] == 1
-    assert metrics_dict["tasks"]["failed"] == 1
 
 
 def test_a2a_metrics_thread_safety():

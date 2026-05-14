@@ -45,7 +45,13 @@ class A2AMetrics:
     def record_webhook_failure(self) -> None:
         with self._lock:
             self._webhook_failures += 1
-    
+
+    def record_webhook_attempt_and_success(self) -> None:
+        """Atomically record both webhook attempt and success."""
+        with self._lock:
+            self._webhook_attempts += 1
+            self._webhook_successes += 1
+
     def record_task_received(self) -> None:
         with self._lock:
             self._tasks_received += 1
@@ -57,10 +63,6 @@ class A2AMetrics:
     def record_task_canceled(self) -> None:
         with self._lock:
             self._tasks_canceled += 1
-    
-    def record_task_failed(self) -> None:
-        with self._lock:
-            self._tasks_failed += 1
     
     def get_metrics(self) -> dict:
         with self._lock:
@@ -182,6 +184,7 @@ class A2ARuntimeState:
             self._server = None
             self._thread = None
             self._owner_module = __name__
+            self._metrics = A2AMetrics()
     
     def to_dict(self) -> dict:
         """Export state as dict (for backward compatibility)."""
@@ -207,28 +210,44 @@ def get_runtime_state() -> A2ARuntimeState:
 
 def clear_runtime_state() -> None:
     """Clear the runtime state."""
+    _stop_metrics_logger()
     state = get_runtime_state()
     state.clear()
 
 
+_metrics_logger_event: Optional[threading.Event] = None
+
+
 def _start_metrics_logger() -> None:
     """Start background thread to log metrics periodically."""
+    global _metrics_logger_event
+
     if os.getenv("A2A_METRICS_LOG_ENABLED", "false").lower() != "true":
         return
-    
+
+    # Stop any existing logger
+    _stop_metrics_logger()
+
     log_interval = int(os.getenv("A2A_METRICS_LOG_INTERVAL", "300"))  # 5 minutes default
-    
+    _metrics_logger_event = threading.Event()
+
     def log_metrics():
-        while True:
+        while not _metrics_logger_event.wait(log_interval):
             try:
                 state = get_runtime_state()
                 metrics = state.get_metrics().get_metrics()
                 _logger.info("[A2A Metrics] %s", json.dumps(metrics))
-                time.sleep(log_interval)
             except Exception as exc:
                 _logger.error("[A2A Metrics] Logger error: %s", exc)
-                time.sleep(log_interval)
-    
+
     thread = threading.Thread(target=log_metrics, daemon=True)
     thread.start()
     _logger.info("[A2A Metrics] Periodic logging started (interval: %ds)", log_interval)
+
+
+def _stop_metrics_logger() -> None:
+    """Stop the background metrics logger if running."""
+    global _metrics_logger_event
+    if _metrics_logger_event is not None:
+        _metrics_logger_event.set()
+        _metrics_logger_event = None
