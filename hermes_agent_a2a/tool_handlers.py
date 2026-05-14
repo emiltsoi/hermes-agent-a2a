@@ -599,30 +599,39 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
     }
     env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
+    from .worker_registry import register_worker, unregister_worker
+    proc = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [venv_python, worker_script],
-            input=json.dumps(worker_params),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             env=env,
         )
+        register_worker(task_id, proc)
+        stdout, stderr = proc.communicate(input=json.dumps(worker_params), timeout=timeout)
     except subprocess.TimeoutExpired:
+        if proc:
+            proc.kill()
+            proc.wait()
         return {
             "id": task_id,
             "status": {"state": "failed"},
             "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],
         }
+    finally:
+        unregister_worker(task_id)
 
     if proc.returncode == 0:
         try:
-            worker_result = json.loads(proc.stdout)
+            worker_result = json.loads(stdout)
         except json.JSONDecodeError:
             return {
                 "id": task_id,
                 "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3: non-JSON worker output: {proc.stdout[:200]!r}"}], "index": 0}],
+                "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3: non-JSON worker output: {stdout[:200]!r}"}], "index": 0}],
             }
         response_text = worker_result.get("response", "")
         return {
@@ -634,7 +643,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
         return {
             "id": task_id,
             "status": {"state": "failed"},
-            "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker error: {proc.stderr.strip()[:300]}"}], "index": 0}],
+            "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker error: {stderr.strip()[:300]}"}], "index": 0}],
         }
 
 

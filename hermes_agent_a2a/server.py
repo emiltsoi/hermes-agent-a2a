@@ -334,8 +334,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 result["artifacts"] = [{"parts": [{"type": "text", "text": status["response"]}], "index": 0}]
         elif method == "tasks/cancel":
             tid = params.get("id", "")
+            from .worker_registry import cancel_worker
+            worker_canceled = cancel_worker(tid)
             task_queue.cancel(tid)
-            result = {"id": tid, "status": {"state": "canceled"}}
+            result = {"id": tid, "status": {"state": "canceled"}, "metadata": {"hermes": {"worker_canceled": worker_canceled}}}
         else:
             self._send_json({
                 "jsonrpc": "2.0",

@@ -181,6 +181,32 @@ transports:
       secret_env: TARGET_HERMES_WEBHOOK_SECRET
 ```
 
+Telegram-backed session routing example:
+
+```yaml
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      host: 0.0.0.0
+      port: 8644
+      secret: ${TARGET_HERMES_WEBHOOK_SECRET}
+      routes:
+        a2a_trigger:
+          secret: ${TARGET_HERMES_WEBHOOK_SECRET}
+          prompt: "{text}"
+          deliver: telegram
+          deliver_extra:
+            chat_id: "<TELEGRAM_CHAT_ID>"
+          target_session: "telegram:dm:<TELEGRAM_CHAT_ID>"
+          source:
+            platform: telegram
+            chat_type: dm
+            chat_id: "<TELEGRAM_CHAT_ID>"
+            user_id: "<TELEGRAM_USER_ID>"
+            user_name: "<TELEGRAM_DISPLAY_NAME>"
+```
+
 Without this routing, `a2a_send_session_message` may reach the webhook but not land in the intended Hermes session. Use `a2a_send_protocol_task` when you need a pollable A2A task result.
 
 ## Runtime environment

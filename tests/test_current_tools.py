@@ -1,4 +1,6 @@
 import os
+import sys
+import subprocess
 from unittest.mock import patch
 
 import yaml
@@ -8,6 +10,7 @@ from hermes_agent_a2a import tool_handlers as tools
 from hermes_agent_a2a import tool_registry
 from hermes_agent_a2a.a2a_spec import build_hermes_metadata, build_task_cancel_payload, build_task_send_payload, parse_task_result
 from hermes_agent_a2a.identity import resolve_agent
+from hermes_agent_a2a.worker_registry import cancel_worker, register_worker, unregister_worker
 
 
 class FakeRegistry:
@@ -247,3 +250,19 @@ def test_session_schema_and_help_are_explicitly_one_way():
     assert "delivery/relay status only" in description
     assert "one-way" in help_text
     assert "does not wait for or guarantee" in help_text
+
+
+def test_worker_registry_cancels_running_process():
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        register_worker("task-cancel", proc)
+        assert cancel_worker("task-cancel") is True
+        assert proc.poll() is not None
+    finally:
+        unregister_worker("task-cancel")
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_worker_registry_returns_false_for_unknown_task():
+    assert cancel_worker("missing-task") is False

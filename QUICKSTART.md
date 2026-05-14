@@ -156,6 +156,32 @@ transports:
       secret_env: TARGET_HERMES_WEBHOOK_SECRET
 ```
 
+Telegram-backed route example:
+
+```yaml
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      host: 0.0.0.0
+      port: 8644
+      secret: ${TARGET_HERMES_WEBHOOK_SECRET}
+      routes:
+        a2a_trigger:
+          secret: ${TARGET_HERMES_WEBHOOK_SECRET}
+          prompt: "{text}"
+          deliver: telegram
+          deliver_extra:
+            chat_id: "<TELEGRAM_CHAT_ID>"
+          target_session: "telegram:dm:<TELEGRAM_CHAT_ID>"
+          source:
+            platform: telegram
+            chat_type: dm
+            chat_id: "<TELEGRAM_CHAT_ID>"
+            user_id: "<TELEGRAM_USER_ID>"
+            user_name: "<TELEGRAM_DISPLAY_NAME>"
+```
+
 Without this routing, the webhook can receive the message but the target Hermes gateway may not deliver it into the desired session.
 
 ## Troubleshooting
