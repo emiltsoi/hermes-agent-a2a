@@ -11,7 +11,7 @@ A2A_HELP = {
         "properties": {
             "topic": {
                 "type": "string",
-                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "examples"],
+                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "external_requirements", "examples"],
                 "description": "Optional help topic to focus on",
                 "default": "overview",
             },

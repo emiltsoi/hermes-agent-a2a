@@ -91,6 +91,18 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
             "The protocol path supports direct URLs, bearer auth, timeouts, and tasks/get polling controls.",
             "Future work: richer Agent Card skill selection, auth negotiation beyond bearer tokens, streaming, and non-Hermes task state mapping.",
         ],
+        "external_requirements": [
+            "Ask the external A2A provider for the Agent Card URL, usually https://host/.well-known/agent.json.",
+            "Ask for the JSON-RPC task endpoint URL that accepts tasks/send and tasks/get.",
+            "Ask whether the Agent Card URL and JSON-RPC endpoint URL are the same base URL or separate URLs.",
+            "Ask for the auth scheme: none, bearer token, API key header, signed request, mTLS, or another mechanism.",
+            "Ask for supported A2A methods: tasks/send, tasks/get, tasks/cancel, streaming, or vendor-specific methods.",
+            "Ask for supported message part types: text, data, file, image, or vendor-specific parts.",
+            "Ask for task state behavior: submitted, working, completed, failed, canceled, rejected, or custom states.",
+            "Ask for timeout, polling, rate-limit, and maximum payload/response-size expectations.",
+            "Ask whether responses return text in artifacts.parts, status.message.parts, message.parts, or a custom field.",
+            "After receiving the Agent Card URL, call a2a_discover(url='...', auth_token='...') and inspect raw_card.",
+        ],
         "examples": [
             "a2a_discover(name='yoyo')",
             "a2a_send_protocol_task(name='yoyo', message='Review this plan')",
