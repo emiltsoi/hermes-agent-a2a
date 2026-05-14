@@ -213,13 +213,11 @@ def test_local_worker_returns_hermes_local_subprocess_envelope(tmp_path, monkeyp
     (hermes_home / "hermes-agent").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(hermes_home / "profiles" / "agent0"))
 
-    completed = subprocess.CompletedProcess(
-        args=["worker"],
-        returncode=0,
-        stdout='{"response": "local done"}',
-        stderr="",
-    )
-    with patch.object(tools.subprocess, "run", return_value=completed):
+    from unittest.mock import MagicMock
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = ('{"response": "local done"}', "")
+    mock_proc.returncode = 0
+    with patch.object(tools.subprocess, "Popen", return_value=mock_proc):
         result = tools.handle_run_local_agent_task(name="agent1", message="do local", task_id="local-task-1")
 
     assert result["task_id"] == "local-task-1"

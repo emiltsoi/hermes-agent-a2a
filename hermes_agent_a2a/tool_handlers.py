@@ -556,36 +556,48 @@ def _handle_call_mode2(
     }
     env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
+    from .worker_registry import register_worker, unregister_worker
+    proc = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [venv_python, worker_script],
-            input=json.dumps(params),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             env=env,
         )
-        if proc.returncode == 0:
-            try:
-                result = json.loads(proc.stdout)
-                if not isinstance(result, dict):
-                    result = {"response": str(result)}
-                return {
-                    "task_id": task_id,
-                    "state": "completed",
-                    "response": result.get("response", ""),
-                    "source": f"ephemeral-local:{name}",
-                    "mode": "2",
-                    "hermes": hermes,
-                    "a2a_envelope": envelope,
-                    "raw_result": result,
-                }
-            except json.JSONDecodeError:
-                return {"error": f"Mode 2 worker returned non-JSON on stdout (rc=0): {proc.stdout[:500]!r}"}
-        else:
-            return {"error": f"Mode 2 worker error (rc={proc.returncode}): {proc.stderr.strip()[:500]}"}
+        register_worker(task_id, proc)
+        stdout, stderr = proc.communicate(input=json.dumps(params), timeout=timeout)
     except subprocess.TimeoutExpired:
+        if proc:
+            proc.kill()
+            proc.wait()
         return {"error": f"Mode 2 worker timed out after {timeout}s"}
+    finally:
+        unregister_worker(task_id)
+        if proc and proc.poll() is None:
+            proc.wait()  # ensure process is reaped
+
+    if proc is None or proc.returncode != 0:
+        err = stderr.strip() if proc else "process not started"
+        return {"error": f"Mode 2 worker error (rc={proc.returncode if proc else 'N/A'}): {err[:500]}"}
+    try:
+        result = json.loads(stdout)
+        if not isinstance(result, dict):
+            result = {"response": str(result)}
+        return {
+            "task_id": task_id,
+            "state": "completed",
+            "response": result.get("response", ""),
+            "source": f"ephemeral-local:{name}",
+            "mode": "2",
+            "hermes": hermes,
+            "a2a_envelope": envelope,
+            "raw_result": result,
+        }
+    except json.JSONDecodeError:
+        return {"error": f"Mode 2 worker returned non-JSON on stdout (rc=0): {stdout[:500]!r}"}
 
 
 # ----------------------------------------------------------------------
@@ -669,9 +681,6 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
             "status": {"state": "failed"},
             "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker error: {stderr.strip()[:300]}"}], "index": 0}],
         }
-
-
-# ----------------------------------------------------------------------
 # Mode 3: caller side
 # ----------------------------------------------------------------------
 
@@ -1073,21 +1082,25 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     own_telegram_chat_id = own_vault.get("platforms", {}).get("telegram", {}).get("default_chat_id", "")
     echo_ok = False
     if own_bot_token and own_telegram_chat_id:
-        from .platforms.telegram import TelegramHandler
-        handler = TelegramHandler()
-        echo_result = handler.send_message(
-            token=own_bot_token,
-            chat_id=str(own_telegram_chat_id),
-            text=padded_message,
-            parse_mode="HTML",
-        )
-        echo_ok = bool(echo_result.get("ok", False))
-        # Non-fatal if echo fails — the webhook delivery is what matters
-        if not echo_ok:
-            import logging
-            logging.getLogger(__name__).warning(
-                "[a2a_send_session_message] sender echo failed (non-fatal): %s", echo_result
-            )
+        import logging
+        _logger = logging.getLogger(__name__)
+        try:
+            import urllib.request
+            url = f"https://api.telegram.org/bot{own_bot_token}/sendMessage"
+            payload = _json.dumps({
+                "chat_id": str(own_telegram_chat_id),
+                "text": padded_message,
+                "parse_mode": "HTML",
+            }).encode()
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                echo_result = _json.loads(resp.read().decode())
+            if echo_result.get("ok"):
+                echo_ok = True
+            else:
+                _logger.warning("[a2a_send_session_message] sender echo failed (non-fatal): %s", echo_result)
+        except Exception as exc:
+            _logger.warning("[a2a_send_session_message] sender echo failed (non-fatal): %s", exc)
 
     return {
         "task_id": task_id,
