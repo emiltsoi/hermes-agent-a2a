@@ -28,6 +28,7 @@ from .a2a_spec.tasks import (
     parse_json_rpc_error,
     parse_task_result,
 )
+from .worker_registry import cancel_worker, register_worker, unregister_worker
 
 logger = logging.getLogger(__name__)
 
@@ -556,7 +557,6 @@ def _handle_call_mode2(
     }
     env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
-    from .worker_registry import register_worker, unregister_worker
     proc = None
     try:
         proc = subprocess.Popen(
@@ -635,7 +635,6 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
     }
     env = {**os.environ, "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
-    from .worker_registry import register_worker, unregister_worker
     proc = None
     try:
         proc = subprocess.Popen(
@@ -923,8 +922,19 @@ def handle_cancel_protocol_task(
 ) -> dict:
     if not task_id:
         return {"error": "'task_id' is required"}
+
+    # Always attempt local cancellation first — handles local Mode 2 workers
+    # that are registered in worker_registry even when no remote target exists.
+    local_canceled = cancel_worker(task_id)
+
+    # If no remote target provided, return local result only.
     if not url and not name:
-        return {"error": "Provide either 'url' or 'name'"}
+        return {
+            "task_id": task_id,
+            "state": "canceled" if local_canceled else "unknown",
+            "local_canceled": local_canceled,
+            "response": "canceled local worker" if local_canceled else "no local worker found",
+        }
 
     resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
     if name:
