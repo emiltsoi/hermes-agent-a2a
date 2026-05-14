@@ -1,0 +1,23 @@
+id: external-demo
+name: External Demo
+description: Example external A2A-compatible agent
+role: external-a2a-agent
+external: true
+transports:
+  a2a_rpc:
+    protocol: google-a2a
+    url: https://external.example/a2a/rpc
+    auth:
+      type: api_key
+      header: X-API-Key
+      value_env: EXTERNAL_DEMO_A2A_KEY
+  agent_card:
+    protocol: google-a2a-agent-card
+    url: https://external.example
+    path: /.well-known/agent.json
+    auth:
+      type: api_key
+      header: X-API-Key
+      value_env: EXTERNAL_DEMO_A2A_KEY
+metadata:
+  source: manual

@@ -1,10 +1,16 @@
-# HermesA2A v2 -- Minimal Agent Config Template
+# Hermes Agent A2A -- Minimal Profile Config Template
 # Copy to profiles/<profile>/config.yaml and adjust.
 
 plugins:
   enabled:
-    - hermes-a2a-v2
+    - hermes-agent-a2a
 
 a2a:
   enabled: true
-  vault: auto  # resolves: agent vault -> profile vault -> env vars -> explicit config
+  vault: auto  # resolves: fleet identity -> profile identity/vault -> env vars -> explicit config
+
+# Optional A2A server bind settings. Prefer loopback unless this profile must
+# accept direct protocol calls from another host.
+a2a_server:
+  host: 127.0.0.1
+  port: 8081

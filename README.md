@@ -1,125 +1,184 @@
-# Hermes A2A Plugin
+# Hermes Agent A2A
 
-A self-contained A2A (Agent-to-Agent) protocol plugin for [Hermes Agent](https://github.com/your-org/hermes-agent). No fleet paths, no hardcoded identities, no gateway patches.
+`hermes-agent-a2a` is the A2A toolset plugin for Hermes Agent. It gives Hermes profiles a local A2A HTTP server plus outbound tools for Hermes fleet agents and external A2A-compatible agents.
 
----
+## Capabilities
 
-## What this plugin does
+| Capability | Tools / Files | Purpose |
+|---|---|---|
+| Agent discovery | `a2a_discover` | Fetch an Agent Card by registry name or direct URL. Can auto-register external agents. |
+| Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `tasks/send` and poll `tasks/get`. |
+| Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker. |
+| Hermes remote workers | `a2a_run_remote_agent_task` | Ask a remote Hermes A2A server to run its own ephemeral worker. |
+| Session relay | `a2a_send_session_message` | Send through Hermes gateway/session routing. |
+| Registry | `~/.hermes/fleet/a2a/agents/<name>/identity.yaml` | Stores transport URLs and auth metadata. |
+| Help | `a2a_help` | In-band help for protocol, workers, sessions, external agents, security, and troubleshooting. |
 
-| Capability | Description |
-|---|---|
-| **A2A HTTP Server** | Runs an HTTP server (`/a2a/*`) on a configurable port. Agents discover each other via the A2A discovery protocol. |
-| **Vault Identity** | Reads Telegram bot tokens, chat IDs, and agent names from `vault.yaml` via `VaultResolver`. Profile-relative — works for any profile. |
-| **4 Tools** | `a2a_discover`, `a2a_list`, `a2a_call`, `a2a_telegram` — wired into Hermes Agent when the plugin is installed. |
-| **Webhook Routing** | `pre_gateway_dispatch` hook intercepts Telegram updates and routes them to the A2A server when addressed to a known agent. |
+## Current toolset
 
----
+The plugin registers the `a2a` toolset with these tools:
 
-## What Hermes Agent provides
-
-When this plugin is installed, these tools become available to your agent automatically:
-
-- **`a2a_discover`** — Probe a host for A2A protocol support
-- **`a2a_list`** — List agent capabilities from the local A2A server
-- **`a2a_call`** — Send a task to a remote agent via A2A (supports mode 2 and 3)
-- **`a2a_telegram`** — Send a message via a Telegram bot using vault credentials
-
----
+- `a2a_help`
+- `a2a_discover`
+- `a2a_list`
+- `a2a_send_protocol_task`
+- `a2a_run_local_agent_task`
+- `a2a_run_remote_agent_task`
+- `a2a_send_session_message`
 
 ## Install
 
-### Option A: Automated installer (recommended)
+### Clone into Hermes plugins
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/your-org/hermes-agent-a2a/main/install.sh | bash
+git clone https://github.com/emiltsoi/hermes-agent-a2a.git ~/.hermes/plugins/hermes-agent-a2a
+python3 -m pip install -e ~/.hermes/plugins/hermes-agent-a2a
 ```
 
-### Option B: pip install from source
+### Or run the installer
 
 ```bash
-pip install -e /path/to/hermes-agent-a2a
+INSTALL_REPO_URL=https://github.com/emiltsoi/hermes-agent-a2a.git \
+  bash <(curl -sSL https://raw.githubusercontent.com/emiltsoi/hermes-agent-a2a/main/install.sh)
 ```
 
-### Option C: ClawHub
+## Profile configuration
+
+A minimal profile config is provided at:
+
+```text
+templates/agent-config.yaml
+```
+
+Enable the plugin in your Hermes profile:
+
+```yaml
+plugins:
+  enabled:
+    - hermes-agent-a2a
+
+a2a:
+  enabled: true
+  vault: auto
+```
+
+The `templates/` folder is still useful: it is the canonical minimal profile config template for new Hermes profiles using this plugin.
+
+## Identity registry
+
+Hermes fleet identities live under:
+
+```text
+~/.hermes/fleet/a2a/agents/<agent-name>/identity.yaml
+```
+
+Example external identity:
+
+```yaml
+id: external-demo
+name: External Demo
+external: true
+transports:
+  a2a_rpc:
+    protocol: google-a2a
+    url: https://external.example/a2a/rpc
+    auth:
+      type: api_key
+      header: X-API-Key
+      value_env: EXTERNAL_DEMO_A2A_KEY
+  agent_card:
+    protocol: google-a2a-agent-card
+    url: https://external.example
+    path: /.well-known/agent.json
+    auth:
+      type: api_key
+      header: X-API-Key
+      value_env: EXTERNAL_DEMO_A2A_KEY
+```
+
+Use environment variables for secrets. Do not store raw third-party API keys in identity files.
+
+## External A2A agent onboarding
+
+Start with discovery:
+
+```text
+a2a_discover(
+  url="https://external.example",
+  agent_card_path="/.well-known/agent.json",
+  auth_type="api_key",
+  auth_header="X-API-Key",
+  auth_value="runtime-secret"
+)
+```
+
+Auto-register the external agent:
+
+```text
+a2a_discover(
+  url="https://external.example",
+  agent_card_path="/.well-known/agent.json",
+  auth_type="api_key",
+  auth_header="X-API-Key",
+  auth_value="runtime-secret",
+  register=True,
+  register_as="external-demo",
+  rpc_url="https://external.example/a2a/rpc",
+  auth_value_env="EXTERNAL_DEMO_A2A_KEY"
+)
+```
+
+Then call by name:
+
+```text
+a2a_send_protocol_task(
+  name="external-demo",
+  message="Hello from Hermes"
+)
+```
+
+## Hermes worker modes
+
+Use protocol tasks for external A2A agents. Use worker tools only for Hermes-managed agents:
+
+```text
+a2a_run_local_agent_task(name="agent1", message="Work locally", timeout=300)
+a2a_run_remote_agent_task(name="agent1", message="Work on your host", timeout=300)
+```
+
+## Runtime environment
+
+Common variables:
+
+| Variable | Purpose |
+|---|---|
+| `HERMES_HOME` | Hermes root or profile path. Defaults to `~/.hermes`. |
+| `A2A_AGENT_NAME` | Current agent/profile name. |
+| `A2A_VAULT_PATH` | Fleet registry root. Defaults to `$HERMES_HOME/fleet` or root-derived equivalent. |
+| `A2A_HOST` | A2A server bind host. Defaults to `127.0.0.1`. |
+| `A2A_PORT` | A2A server port. Defaults to `8081`. |
+| `A2A_AUTH_TOKEN` | Optional inbound bearer token for this server. |
+| `A2A_REQUIRE_AUTH` | Set `true` to reject unauthenticated inbound requests. |
+
+## Development checks
 
 ```bash
-hermes plugin install hermes-agent-a2a
+python3 -m py_compile hermes_agent_a2a/*.py
+python3 -m pytest
 ```
 
----
+## Repository layout
 
-## Configure
-
-The plugin stores identity in a **vault file** — no hardcoded tokens anywhere.
-
-1. Copy the example vault:
-
-   ```bash
-   cp vault.yaml.example ~/.hermes/profiles/<profile>/a2a/vault.yaml
-   ```
-
-2. Edit `vault.yaml`:
-
-   ```yaml
-   telegram:
-     bot_token: "your-bot-token-from-botfather"
-     chat_id: "your-telegram-chat-id"
-
-   agent:
-     name: "britney"   # your agent's name
-   ```
-
-3. Set your profile in the Hermes Agent environment:
-
-   ```bash
-   HERMES_PROFILE=<profile>  # defaults to "default"
-   ```
-
----
-
-## Usage
-
-### Discover a remote agent
-
+```text
+hermes_agent_a2a/
+  plugin.py       # plugin registration and server lifecycle
+  server.py       # inbound A2A JSON-RPC server
+  tools.py        # outbound tool handlers
+  identity.py     # identity registry and transport normalization
+  hooks.py        # Hermes gateway/LLM hooks
+  security.py     # inbound filtering, redaction, audit, rate limiting
+  persistence.py  # exchange persistence
+  validators.py   # config validation helpers
+templates/
+  agent-config.yaml
 ```
-a2a_discover host=agent.example.com port=8000
-```
-
-### List local agent capabilities
-
-```
-a2a_list
-```
-
-### Call a remote agent (mode 2: streaming)
-
-```
-a2a_call agent_id=agent-123 method=tasks/send mode=2 params={"message": {"role": "user", "content": "hello"}}
-```
-
-### Call a remote agent (mode 3: single response)
-
-```
-a2a_call agent_id=agent-123 method=tasks/send mode=3 params={"message": {"role": "user", "content": "hello"}}
-```
-
-### Send a Telegram message
-
-```
-a2a_telegram message="Hello from the A2A plugin!"
-```
-
----
-
-## No gateway patch
-
-This plugin is **fully self-contained**. It does not modify the Hermes Agent gateway or core server. All A2A functionality lives in:
-
-- `src/plugin.py` — plugin registration
-- `src/server.py` — A2A HTTP server
-- `src/tools.py` — 4 tool handlers
-- `src/identity.py` — `VaultResolver` (vault.yaml-based identity)
-- `src/hooks.py` — Telegram webhook hook
-- `src/bootstrap.py` — capability bootstrap
-
-Install, configure, restart — done.

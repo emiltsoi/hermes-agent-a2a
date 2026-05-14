@@ -2,6 +2,7 @@ name: hermes-agent-a2a
 version: "3.0.0"
 description: |
   A2A (Agent-to-Agent) protocol plugin for Hermes Agent.
-  Self-contained: exposes a2a_telegram, a2a_call, a2a_discover, a2a_list tools.
-  No gateway patch required. Fleet-agnostic — no hardcoded paths.
+  Self-contained: exposes discovery, protocol task, session-message,
+  local-worker, and remote-worker tools through the a2a toolset.
+  Supports Hermes fleet identities and direct external A2A-compatible agents.
 requires_env: []

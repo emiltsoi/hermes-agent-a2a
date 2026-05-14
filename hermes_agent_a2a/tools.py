@@ -349,7 +349,13 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
                 raise RuntimeError(f"Response exceeds {_MAX_RESPONSE_SIZE} bytes")
             return json.loads(data.decode())
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code}") from e
+        body = ""
+        try:
+            body = e.read(_MAX_RESPONSE_SIZE).decode(errors="replace")
+        except Exception:
+            body = ""
+        detail = f": {body[:500]}" if body else ""
+        raise RuntimeError(f"HTTP {e.code}{detail}") from e
     except urllib.error.URLError as e:
         if isinstance(e.reason, (TimeoutError, OSError)) and "timed out" in str(e.reason):
             raise TimeoutError(f"Timed out after {timeout}s") from e
@@ -398,13 +404,15 @@ def handle_discover(
         target_url = agent_card.get("url", "") or a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
         resolved_auth = agent_card.get("auth") or a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
         agent_card_path = agent_card.get("path", agent_card_path)
+        allow_loopback = bool(agent_card.get("allow_loopback") or a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
         target_url = url
+        allow_loopback = False
 
     try:
-        target_url = _validate_target_url(target_url, allow_loopback=bool(name))
+        target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
     except ValueError as e:
         return {"error": str(e)}
 
@@ -770,13 +778,15 @@ def handle_send_protocol_task(
         a2a_rpc = _transport(agent_info, "a2a_rpc")
         target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
         resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
+        allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
         target_url = url
+        allow_loopback = False
 
     try:
-        target_url = _validate_target_url(target_url, allow_loopback=bool(name))
+        target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
     except ValueError as e:
         return {"error": str(e)}
 
@@ -870,8 +880,6 @@ def handle_send_protocol_task(
     }
 
 
-handle_call = handle_send_protocol_task
-
 @_rate_limited
 def handle_run_local_agent_task(
     name: str = "",
@@ -898,7 +906,7 @@ def handle_run_remote_agent_task(
 # ----------------------------------------------------------------------
 
 
-def handle_telegram(args: dict = None, **kwargs) -> dict:
+def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     """Send a session-aware message to a Hermes mesh peer.
 
     Two-part delivery:
@@ -1080,6 +1088,6 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         name=schemas.A2A_TELEGRAM["name"],
         toolset="a2a",
         schema=schemas.A2A_TELEGRAM,
-        handler=handle_telegram,
+        handler=handle_send_session_message,
     )
     logger.info("[A2A] Phase 3 tools registered")

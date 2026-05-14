@@ -173,9 +173,14 @@ def clear_runtime_server(server=None) -> None:
     state["thread"] = None
 
 
-def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, retries=3, base_delay=1.0):
-    """POST to the internal webhook to trigger an agent turn, with retry."""
-    secret = os.getenv("A2A_WEBHOOK_SECRET", "")
+def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=3, base_delay=1.0):
+    """POST to the internal webhook to trigger an agent turn, with retry.
+
+    Args:
+        deliver_only: if True, the webhook handler invokes the agent but skips
+            Telegram routing (used for peer-originated A2A tasks).
+    """
+    secret = os.getenv("A2A_WEBHOOK_SECRET", "") or os.getenv("WEBHOOK_SECRET", "")
     if not secret:
         return
 
@@ -187,6 +192,8 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, ret
     }
     if mode is not None:
         body_dict["mode"] = mode
+    if deliver_only:
+        body_dict["deliver_only"] = True
     # Canonical JSON before HMAC: sort_keys ensures deterministic byte order
     # regardless of dict insertion order. ensure_ascii=False to avoid
     # unnecessary escaping of non-ASCII characters in task_id or message.
@@ -378,6 +385,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         raw_name = metadata.get("sender_name", "") or ""
         metadata["sender_name"] = "".join(c for c in raw_name if c.isalnum() or c in "-_.@ ")[:64]
 
+        # Mark peer-originated tasks so hooks bypass Telegram webhook delivery
+        metadata["_a2a_origin"] = "peer"
+
         audit.log("task_received", {"task_id": task_id, "length": len(user_text)})
 
         if task_queue.pending_count() >= _MAX_PENDING:
@@ -395,7 +405,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 "artifacts": [{"parts": [{"type": "text", "text": "Task ID already in use"}], "index": 0}],
             }
 
-        threading.Thread(target=_trigger_webhook, daemon=True).start()
+        # Wake up the gateway via internal webhook. deliver_only=True tells
+        # the webhook handler to invoke the agent without routing to Telegram.
+        # The agent's pre_llm_call hook drains the shared task_queue, processes
+        # the task, and post_llm_call marks it complete.
+        threading.Thread(
+            target=_trigger_webhook,
+            kwargs={"task_id": task_id, "deliver_only": True},
+            daemon=True,
+        ).start()
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 
