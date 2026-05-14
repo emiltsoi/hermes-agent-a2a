@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import urllib.request
 from unittest.mock import patch
 
 import yaml
@@ -250,6 +251,43 @@ def test_session_schema_and_help_are_explicitly_one_way():
     assert "delivery/relay status only" in description
     assert "one-way" in help_text
     assert "does not wait for or guarantee" in help_text
+
+
+def test_session_message_returns_a2a_shaped_delivery_ack(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"delivery_id": "delivery-1"}'
+
+    agent = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+                "auth": {"type": "hmac", "secret": "secret"},
+            }
+        }
+    }
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+        urllib.request,
+        "urlopen",
+        return_value=FakeResponse(),
+    ):
+        result = tools.handle_send_session_message(message="hello", agent="agent1", task_id="task-123456789")
+
+    assert result["task_id"] == "task-123456789"
+    assert result["state"] == "completed"
+    assert result["delivery"] == "delivered"
+    assert result["reply_expected"] is False
+    assert result["hermes"]["route"] == "session"
+    assert result["hermes"]["delivery"] == "one_way"
+    assert result["a2a_envelope"]["method"] == "tasks/send"
+    assert result["a2a_envelope"]["params"]["message"]["metadata"]["expected_action"] == "acknowledge"
 
 
 def test_worker_registry_cancels_running_process():

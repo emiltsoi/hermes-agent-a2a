@@ -995,7 +995,17 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         return {"error": f"Agent '{agent}' not found in vault registry"}
 
     from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
-    msg_id = str(uuid.uuid4())[:12]
+    task_id = task_id or str(uuid.uuid4())
+    msg_id = task_id[:12]
+    hermes = build_hermes_metadata(route="session", execution="gateway_session", delivery="one_way", reply_mode="none")
+    envelope = build_task_send_payload(
+        task_id=task_id,
+        message=message,
+        sender_name=from_agent,
+        intent="notification",
+        expected_action="acknowledge",
+        hermes=hermes,
+    )
     header = f"[a2a][from:{from_agent}][to:{agent}][id:{msg_id}][cta:{cta}]"
     if ref:
         header += f"[ref:{ref}]"
@@ -1055,11 +1065,17 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
             )
 
     return {
+        "task_id": task_id,
+        "state": "completed",
         "status": "delivered",
+        "delivery": "delivered",
+        "reply_expected": False,
         "message_id": delivery_id,
         "agent": agent,
         "gateway_delivery": True,
         "sender_echo": echo_ok,
+        "hermes": hermes,
+        "a2a_envelope": envelope,
     }
 
 

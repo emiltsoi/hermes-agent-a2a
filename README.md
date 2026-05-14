@@ -27,7 +27,7 @@ The plugin registers the `a2a` toolset with these tools:
 - `a2a_run_remote_agent_task`
 - `a2a_send_session_message`
 
-`a2a_send_session_message` is intentionally one-way: it delivers into the target Hermes session/gateway and returns relay status only. Use `a2a_send_protocol_task` when you need a pollable A2A task response.
+`a2a_send_session_message` is intentionally one-way: it delivers into the target Hermes session/gateway and returns an A2A-shaped delivery ACK, not a semantic reply. Use `a2a_send_protocol_task` when you need a pollable A2A task response.
 
 ## Install
 
@@ -207,7 +207,7 @@ platforms:
             user_name: "<TELEGRAM_DISPLAY_NAME>"
 ```
 
-Without this routing, `a2a_send_session_message` may reach the webhook but not land in the intended Hermes session. Use `a2a_send_protocol_task` when you need a pollable A2A task result.
+Without this routing, `a2a_send_session_message` may reach the webhook but not land in the intended Hermes session. The tool returns `state=completed`, `delivery=delivered`, `reply_expected=false`, and Hermes metadata with `route=session`, `delivery=one_way`. Use `a2a_send_protocol_task` when you need a pollable A2A task result.
 
 ## Runtime environment
 
