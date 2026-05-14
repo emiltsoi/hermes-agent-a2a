@@ -11,7 +11,7 @@ A2A_HELP = {
         "properties": {
             "topic": {
                 "type": "string",
-                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "external_requirements", "examples"],
+                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "external_requirements", "register_external", "security", "troubleshooting", "examples"],
                 "description": "Optional help topic to focus on",
                 "default": "overview",
             },
@@ -55,6 +55,32 @@ A2A_DISCOVER = {
                 "type": "string",
                 "description": "Optional Agent Card path for external agents (default: /.well-known/agent.json)",
                 "default": "/.well-known/agent.json",
+            },
+            "register": {
+                "type": "boolean",
+                "description": "Persist a discovered external agent into the local A2A fleet registry",
+                "default": False,
+            },
+            "register_as": {
+                "type": "string",
+                "description": "Registry name to use when register=true",
+            },
+            "rpc_url": {
+                "type": "string",
+                "description": "JSON-RPC task endpoint URL to save when register=true; defaults to url",
+            },
+            "auth_token_env": {
+                "type": "string",
+                "description": "Environment variable name containing bearer token to save in identity.yaml instead of a raw token",
+            },
+            "auth_value_env": {
+                "type": "string",
+                "description": "Environment variable name containing api_key/custom_header value to save in identity.yaml instead of a raw secret",
+            },
+            "register_overwrite": {
+                "type": "boolean",
+                "description": "Overwrite an existing registered identity with the same name",
+                "default": False,
             },
             "name": {
                 "type": "string",

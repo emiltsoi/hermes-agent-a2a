@@ -386,6 +386,7 @@ def list_agents() -> list[dict]:
                     "platforms": raw.get("platforms", {}),
                     "webhook_url": raw.get("webhook_url", ""),
                     "webhook_secret": raw.get("webhook_secret", ""),
+                    "transports": raw.get("transports", {}),
                 })
                 continue
             raw = _load_yaml_file(profile_dir / "a2a" / "vault.yaml") or {}

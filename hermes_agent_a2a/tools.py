@@ -8,6 +8,7 @@ Ehrlich & Lindstrom — HermesA2A 2026.
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -39,6 +40,11 @@ def _resolve_agent_by_name(name: str):
 
 def _list_agents():
     return _vault().list_agents()
+
+
+def _fleet_agents_root() -> Path:
+    from .identity import _fleet_root
+    return _fleet_root() / "a2a" / "agents"
 
 _DEFAULT_TIMEOUT = 120
 _POLL_INTERVAL = 5
@@ -103,6 +109,24 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
             "Ask whether responses return text in artifacts.parts, status.message.parts, message.parts, or a custom field.",
             "For named external agents, store transports.a2a_rpc.url/auth and optional transports.agent_card.url/path/auth in identity.yaml.",
             "After receiving the Agent Card URL, call a2a_discover(url='...', auth_token='...') and inspect raw_card.",
+        ],
+        "register_external": [
+            "Use a2a_discover(url='...', register=True, register_as='name', rpc_url='...') to create a local identity.yaml entry.",
+            "Prefer auth_token_env or auth_value_env when registering so secrets stay in environment variables, not files.",
+            "After registration, call a2a_discover(name='name') and a2a_send_protocol_task(name='name', message='...').",
+            "Use register_overwrite=True only when intentionally replacing an existing identity.",
+        ],
+        "security": [
+            "Direct URL calls reject loopback addresses; named registry calls may allow local fleet URLs.",
+            "Prefer environment-variable backed auth in identity.yaml: token_env or value_env.",
+            "Supported direct auth modes are none, bearer, api_key, and custom_header.",
+            "Do not store raw third-party secrets in prompts, chat history, or committed identity files.",
+        ],
+        "troubleshooting": [
+            "401/403 usually means auth_type/auth_header/auth_token/auth_value or identity.yaml auth is wrong.",
+            "Connection errors usually mean the JSON-RPC endpoint URL is wrong or unreachable.",
+            "Discovery errors usually mean agent_card_path is wrong or the server does not expose an Agent Card.",
+            "No text response means the external agent returned a non-standard response shape; inspect raw_result.",
         ],
         "examples": [
             "a2a_discover(name='yoyo')",
@@ -214,6 +238,93 @@ def _direct_auth(auth_token: Optional[str] = None, auth_type: Optional[str] = No
     return {"type": "bearer", "token": auth_token} if auth_token else {"type": "none"}
 
 
+def _safe_agent_key(name: str) -> str:
+    key = re.sub(r"[^a-z0-9_.-]+", "-", (name or "").strip().lower()).strip("-._")
+    return key[:80]
+
+
+def _public_auth_config(auth_type: Optional[str], auth_header: Optional[str], auth_token_env: Optional[str], auth_value_env: Optional[str], auth: dict) -> dict:
+    auth_type = (auth_type or auth.get("type") or "none").lower()
+    if auth_type == "bearer":
+        return {"type": "bearer", "token_env": auth_token_env} if auth_token_env else {"type": "none"}
+    if auth_type in ("api_key", "custom_header"):
+        header = auth_header or auth.get("header") or auth.get("name") or ""
+        cfg = {"type": auth_type}
+        if header:
+            cfg["header"] = header
+        if auth_value_env:
+            cfg["value_env"] = auth_value_env
+        return cfg if cfg.get("header") and cfg.get("value_env") else {"type": "none"}
+    return {"type": "none"}
+
+
+def _register_external_agent_identity(
+    *,
+    register_as: str,
+    card: dict,
+    agent_card_url: str,
+    agent_card_path: str,
+    rpc_url: str,
+    auth: dict,
+    auth_type: Optional[str],
+    auth_header: Optional[str],
+    auth_token_env: Optional[str],
+    auth_value_env: Optional[str],
+    overwrite: bool,
+) -> dict:
+    import yaml
+
+    agent_key = _safe_agent_key(register_as)
+    if not agent_key:
+        return {"error": "register_as must contain at least one alphanumeric, '.', '_' or '-' character"}
+    try:
+        rpc_url = _validate_target_url(rpc_url, allow_loopback=False)
+        agent_card_url = _validate_target_url(agent_card_url, allow_loopback=False)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    target_dir = _fleet_agents_root() / agent_key
+    target_file = target_dir / "identity.yaml"
+    if target_file.exists() and not overwrite:
+        return {"error": f"Identity already exists for '{agent_key}'; pass register_overwrite=true to replace it"}
+
+    public_auth = _public_auth_config(auth_type, auth_header, auth_token_env, auth_value_env, auth)
+    identity = {
+        "id": agent_key,
+        "name": register_as,
+        "description": card.get("description", ""),
+        "role": "external-a2a-agent",
+        "external": True,
+        "transports": {
+            "a2a_rpc": {
+                "protocol": "google-a2a",
+                "url": rpc_url,
+                "auth": public_auth,
+            },
+            "agent_card": {
+                "protocol": "google-a2a-agent-card",
+                "url": agent_card_url,
+                "path": agent_card_path if agent_card_path.startswith("/") else f"/{agent_card_path}",
+                "auth": public_auth,
+            },
+        },
+        "metadata": {
+            "source": "a2a_discover",
+            "agent_card_name": card.get("name", ""),
+            "version": card.get("version", ""),
+            "skills": [
+                {"name": skill.get("name", ""), "description": skill.get("description", "")}
+                for skill in card.get("skills", []) if isinstance(skill, dict)
+            ],
+            "capabilities": card.get("capabilities", {}),
+        },
+    }
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with open(target_file, "w") as f:
+        yaml.safe_dump(identity, f, sort_keys=False)
+    return {"registered": True, "name": agent_key, "path": str(target_file)}
+
+
 # ----------------------------------------------------------------------
 # HTTP helper
 # ----------------------------------------------------------------------
@@ -258,6 +369,12 @@ def handle_discover(
     auth_header: Optional[str] = None,
     auth_value: Optional[str] = None,
     agent_card_path: str = "/.well-known/agent.json",
+    register: bool = False,
+    register_as: Optional[str] = None,
+    rpc_url: Optional[str] = None,
+    auth_token_env: Optional[str] = None,
+    auth_value_env: Optional[str] = None,
+    register_overwrite: bool = False,
     task_id: Optional[str] = None,
     user_task: Optional[str] = None,
 ) -> dict:
@@ -303,7 +420,7 @@ def handle_discover(
     except Exception as e:
         return {"error": f"Discovery failed: {e}"}
 
-    return {
+    result = {
         "agent_name": card.get("name", "unknown"),
         "description": card.get("description", ""),
         "url": target_url,
@@ -315,6 +432,28 @@ def handle_discover(
         "capabilities": card.get("capabilities", {}),
         "raw_card": card,
     }
+    if register:
+        if name and not register_as:
+            result["registration"] = {"registered": False, "reason": "already_resolved_by_name"}
+        else:
+            registration = _register_external_agent_identity(
+                register_as=register_as or card.get("name") or urlparse(target_url).netloc,
+                card=card,
+                agent_card_url=target_url,
+                agent_card_path=card_path,
+                rpc_url=rpc_url or target_url,
+                auth=resolved_auth,
+                auth_type=auth_type,
+                auth_header=auth_header,
+                auth_token_env=auth_token_env,
+                auth_value_env=auth_value_env,
+                overwrite=bool(register_overwrite),
+            )
+            if registration.get("error"):
+                result["registration"] = {"registered": False, **registration}
+            else:
+                result["registration"] = registration
+    return result
 
 
 # ----------------------------------------------------------------------
@@ -596,7 +735,7 @@ def _extract_a2a_response_text(rpc_result: dict) -> str:
 
 
 @_rate_limited
-def handle_call(
+def handle_send_protocol_task(
     name: Optional[str] = None,
     url: Optional[str] = None,
     auth_token: Optional[str] = None,
@@ -730,6 +869,10 @@ def handle_call(
         "raw_result": rpc_result,
     }
 
+
+handle_call = handle_send_protocol_task
+
+@_rate_limited
 def handle_run_local_agent_task(
     name: str = "",
     message: str = "",
@@ -739,6 +882,7 @@ def handle_run_local_agent_task(
     return _handle_call_mode2(name=name or "", message=message, timeout=int(timeout or 300))
 
 
+@_rate_limited
 def handle_run_remote_agent_task(
     name: str = "",
     message: str = "",
@@ -918,7 +1062,7 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         name=schemas.A2A_CALL["name"],
         toolset="a2a",
         schema=schemas.A2A_CALL,
-        handler=_dict_args_handler(handle_call),
+        handler=_dict_args_handler(handle_send_protocol_task),
     )
     registry.register_tool(
         name=schemas.A2A_RUN_LOCAL_AGENT_TASK["name"],
