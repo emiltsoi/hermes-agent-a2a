@@ -511,6 +511,7 @@ def _handle_call_mode2(
     name: str,
     message: str,
     timeout: int = 300,
+    task_id: Optional[str] = None,
 ) -> dict:
     """Mode 2: spawn ephemeral worker subprocess on the caller machine.
 
@@ -521,6 +522,18 @@ def _handle_call_mode2(
         return {"error": "'name' is required for Mode 2"}
     if not message:
         return {"error": "'message' is required for Mode 2"}
+
+    task_id = task_id or str(uuid.uuid4())
+    hermes = build_hermes_metadata(route="worker", execution="local_subprocess", isolation="local_profile")
+    envelope = build_task_send_payload(
+        task_id=task_id,
+        message=message,
+        sender_name=os.getenv("A2A_AGENT_NAME", "hermes-agent"),
+        intent="consultation",
+        expected_action="reply",
+        hermes=hermes,
+    )
+    envelope["params"]["timeout"] = timeout
 
     agent_home_env = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
     hermes_home = os.path.dirname(agent_home_env.rstrip("/"))
@@ -555,7 +568,18 @@ def _handle_call_mode2(
         if proc.returncode == 0:
             try:
                 result = json.loads(proc.stdout)
-                return result if isinstance(result, dict) else {"response": str(result)}
+                if not isinstance(result, dict):
+                    result = {"response": str(result)}
+                return {
+                    "task_id": task_id,
+                    "state": "completed",
+                    "response": result.get("response", ""),
+                    "source": f"ephemeral-local:{name}",
+                    "mode": "2",
+                    "hermes": hermes,
+                    "a2a_envelope": envelope,
+                    "raw_result": result,
+                }
             except json.JSONDecodeError:
                 return {"error": f"Mode 2 worker returned non-JSON on stdout (rc=0): {proc.stdout[:500]!r}"}
         else:
@@ -858,10 +882,11 @@ def handle_send_protocol_task(
 def handle_run_local_agent_task(
     name: str = "",
     message: str = "",
+    task_id: Optional[str] = None,
     timeout: int = 300,
     user_task: Optional[str] = None,
 ) -> dict:
-    return _handle_call_mode2(name=name or "", message=message, timeout=int(timeout or 300))
+    return _handle_call_mode2(name=name or "", message=message, task_id=task_id, timeout=int(timeout or 300))
 
 
 @_rate_limited

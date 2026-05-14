@@ -206,6 +206,31 @@ def test_remote_worker_uses_hermes_remote_subprocess_metadata():
     assert payload["params"]["message"]["metadata"]["worker_at"] == "target"
 
 
+def test_local_worker_returns_hermes_local_subprocess_envelope(tmp_path, monkeypatch):
+    hermes_home = tmp_path
+    agent_home = hermes_home / "profiles" / "agent1"
+    agent_home.mkdir(parents=True)
+    (hermes_home / "hermes-agent").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home / "profiles" / "agent0"))
+
+    completed = subprocess.CompletedProcess(
+        args=["worker"],
+        returncode=0,
+        stdout='{"response": "local done"}',
+        stderr="",
+    )
+    with patch.object(tools.subprocess, "run", return_value=completed):
+        result = tools.handle_run_local_agent_task(name="agent1", message="do local", task_id="local-task-1")
+
+    assert result["task_id"] == "local-task-1"
+    assert result["state"] == "completed"
+    assert result["response"] == "local done"
+    assert result["hermes"]["route"] == "worker"
+    assert result["hermes"]["execution"] == "local_subprocess"
+    assert result["hermes"]["isolation"] == "local_profile"
+    assert result["a2a_envelope"]["method"] == "tasks/send"
+
+
 def test_a2a_spec_builds_protocol_task_payload_with_hermes_metadata():
     payload = build_task_send_payload(
         task_id="task-1",

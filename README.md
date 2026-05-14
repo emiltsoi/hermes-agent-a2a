@@ -8,7 +8,7 @@
 |---|---|---|
 | Agent discovery | `a2a_discover` | Fetch an Agent Card by registry name or direct URL. Can auto-register external agents. |
 | Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `tasks/send` and poll `tasks/get`. |
-| Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker. |
+| Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker with Hermes A2A metadata. |
 | Hermes remote workers | `a2a_run_remote_agent_task` | Ask a remote Hermes A2A server to run its own ephemeral worker. |
 | Session relay | `a2a_send_session_message` | Send one-way through Hermes gateway/session routing and return delivery status. |
 | Registry | `~/.hermes/fleet/a2a/agents/<name>/identity.yaml` | Stores transport URLs and auth metadata. |
@@ -148,6 +148,8 @@ Use protocol tasks for external A2A agents. Use worker tools only for Hermes-man
 a2a_run_local_agent_task(name="agent1", message="Work locally", timeout=300)
 a2a_run_remote_agent_task(name="agent1", message="Work on your host", timeout=300)
 ```
+
+Both worker tools return task-shaped results with Hermes metadata. Local workers use `route=worker`, `execution=local_subprocess`, and `isolation=local_profile`; remote workers use `execution=remote_subprocess` and `isolation=target_profile`.
 
 ## Hermes session routing requirement
 

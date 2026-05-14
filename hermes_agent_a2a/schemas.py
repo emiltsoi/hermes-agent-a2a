@@ -232,6 +232,10 @@ A2A_RUN_LOCAL_AGENT_TASK = {
                 "type": "string",
                 "description": "The task/message to give to the local ephemeral worker",
             },
+            "task_id": {
+                "type": "string",
+                "description": "Optional task ID for the local worker request",
+            },
             "timeout": {
                 "type": "integer",
                 "description": "Timeout in seconds for the local worker subprocess (default: 300)",
