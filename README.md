@@ -293,6 +293,7 @@ Common variables:
 |---|---|
 | `A2A_METRICS_LOG_ENABLED` | Set `true` to enable periodic metrics logging. Defaults to `false`. |
 | `A2A_METRICS_LOG_INTERVAL` | Interval in seconds between metrics log entries. Defaults to `300` (5 minutes). |
+| `A2A_METRICS_COMMAND_ENABLED` | Set `true` to enable `/a2a_metrics` Telegram slash command. Defaults to `false`. |
 
 ## Architecture
 

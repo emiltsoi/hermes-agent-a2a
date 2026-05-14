@@ -805,3 +805,76 @@ def test_a2a_get_metrics_tool():
     assert result["webhook"]["successes"] >= 1
     assert result["tasks"]["received"] >= 1
     assert result["tasks"]["completed"] >= 1
+
+
+def test_a2a_metrics_command_disabled_by_default(monkeypatch):
+    """Test /a2a_metrics command is disabled by default."""
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "false")
+    
+    result = tools.handle_send_session_message(message="/a2a_metrics", agent="agent1")
+    
+    # Should return error because command is disabled and agent not found
+    assert "error" in result
+
+
+def test_a2a_metrics_command_enabled(monkeypatch):
+    """Test /a2a_metrics command when enabled."""
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "true")
+    
+    result = tools.handle_send_session_message(message="/a2a_metrics", agent="agent1")
+    
+    # Should return metrics formatted for Telegram
+    assert result["state"] == "completed"
+    assert result["delivery"] == "command_response"
+    assert "📊 A2A Metrics" in result["response"]
+    assert "⏱️ Uptime:" in result["response"]
+    assert "🔗 Webhook" in result["response"]
+    assert "📋 Tasks" in result["response"]
+    assert "📬 Queue" in result["response"]
+
+
+def test_a2a_metrics_command_with_whitespace(monkeypatch):
+    """Test /a2a_metrics command with whitespace."""
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "true")
+    
+    result = tools.handle_send_session_message(message="  /a2a_metrics  ", agent="agent1")
+    
+    assert result["state"] == "completed"
+    assert result["delivery"] == "command_response"
+    assert "📊 A2A Metrics" in result["response"]
+
+
+def test_a2a_metrics_command_not_triggered_on_normal_message(monkeypatch):
+    """Test normal messages don't trigger metrics command."""
+    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
+    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "true")
+    
+    agent = {
+        "transports": {
+            "hermes_webhook": {
+                "url": "https://target.example/webhook",
+                "auth": {"type": "hmac", "secret": "test-secret"},
+            }
+        }
+    }
+    
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return b'{"delivery_id": "delivery-1"}'
+    
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+        urllib.request, "urlopen", return_value=FakeResponse()
+    ):
+        result = tools.handle_send_session_message(message="hello", agent="agent1")
+    
+    # Should not return command_response
+    assert result.get("delivery") != "command_response"
+    assert result["state"] == "completed"
+    assert result["delivery"] == "delivered"

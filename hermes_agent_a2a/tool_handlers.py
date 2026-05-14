@@ -1125,6 +1125,18 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
     own_bot_token = own_vault.get("platforms", {}).get("telegram", {}).get("bot_token", "")
 
+    # Check for /a2a_metrics command (Telegram slash command)
+    if os.getenv("A2A_METRICS_COMMAND_ENABLED", "false").lower() == "true":
+        stripped_message = message.strip()
+        if stripped_message.startswith("/a2a_metrics"):
+            from .runtime_state import get_runtime_state as get_state
+            metrics = get_state().get_metrics().get_metrics()
+            return {
+                "state": "completed",
+                "response": _format_metrics_for_telegram(metrics),
+                "delivery": "command_response",
+            }
+
     # Target delivery: route to target gateway webhook. The target gateway's
     # config.yaml owns target_session/deliver_extra and resolves the message
     # into the target Telegram session.
@@ -1271,3 +1283,34 @@ def handle_get_metrics() -> dict:
     """Get current A2A plugin metrics."""
     from .runtime_state import get_runtime_state as get_state
     return get_state().get_metrics().get_metrics()
+
+
+def _format_metrics_for_telegram(metrics: dict) -> str:
+    """Format metrics for Telegram display."""
+    uptime = metrics.get("uptime_seconds", 0)
+    uptime_hours = int(uptime // 3600)
+    uptime_mins = int((uptime % 3600) // 60)
+    
+    webhook = metrics.get("webhook", {})
+    tasks = metrics.get("tasks", {})
+    queue = metrics.get("queue", {})
+    
+    lines = [
+        "📊 A2A Metrics",
+        "",
+        f"⏱️ Uptime: {uptime_hours}h {uptime_mins}m",
+        "",
+        "🔗 Webhook",
+        f"Attempts: {webhook.get('attempts', 0)}",
+        f"✅ Success: {webhook.get('successes', 0)} ({webhook.get('success_rate_percent', 0):.2f}%)",
+        f"❌ Failed: {webhook.get('failures', 0)}",
+        "",
+        "📋 Tasks",
+        f"Received: {tasks.get('received', 0)}",
+        f"Completed: {tasks.get('completed', 0)}",
+        f"Canceled: {tasks.get('canceled', 0)}",
+        f"Failed: {tasks.get('failed', 0)}",
+        "",
+        f"📬 Queue: {queue.get('pending_count', 0)} pending",
+    ]
+    return "\n".join(lines)
