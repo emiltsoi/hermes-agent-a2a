@@ -125,6 +125,40 @@ def _validate_agent_webhook_config(agent_info: dict) -> tuple[bool, str]:
     
     return True, ""
 
+
+def _validate_webhook_reachable(webhook_url: str, timeout: int = 5) -> tuple[bool, str]:
+    """Validate that a webhook URL is reachable via HEAD request.
+    
+    Args:
+        webhook_url: The webhook URL to check.
+        timeout: Timeout in seconds for the reachability check.
+    
+    Returns:
+        Tuple of (is_reachable, error_message).
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request(webhook_url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            # Any 2xx or 3xx response is considered reachable
+            if 200 <= resp.status < 400:
+                return True, ""
+            return False, f"Webhook returned status {resp.status}"
+    except urllib.error.HTTPError as exc:
+        # Some servers don't support HEAD, try GET instead
+        if exc.code == 405:
+            try:
+                req = urllib.request.Request(webhook_url, method="GET")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    if 200 <= resp.status < 400:
+                        return True, ""
+                    return False, f"Webhook returned status {resp.status}"
+            except Exception as e:
+                return False, f"Webhook unreachable: {e}"
+        return False, f"Webhook returned status {exc.code}"
+    except Exception as exc:
+        return False, f"Webhook unreachable: {exc}"
+
 _DEFAULT_TIMEOUT = int(os.getenv("A2A_DEFAULT_TIMEOUT", "120"))
 _POLL_INTERVAL = int(os.getenv("A2A_POLL_INTERVAL", "5"))
 _POLL_MAX_ATTEMPTS = int(os.getenv("A2A_POLL_MAX_ATTEMPTS", "60"))
@@ -1093,6 +1127,16 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     is_valid, validation_error = _validate_agent_webhook_config(target_info)
     if not is_valid:
         return {"error": f"Agent '{agent}' webhook configuration invalid: {validation_error}"}
+
+    # Optional webhook reachability check
+    if os.getenv("A2A_WEBHOOK_REACHABILITY_CHECK", "false").lower() == "true":
+        hermes_webhook = _transport(target_info, "hermes_webhook")
+        target_webhook_url = hermes_webhook.get("url", "") or (target_info.get("webhook_url", "") if isinstance(target_info, dict) else "")
+        if target_webhook_url:
+            reachability_timeout = int(os.getenv("A2A_WEBHOOK_REACHABILITY_TIMEOUT", "5"))
+            is_reachable, reachability_error = _validate_webhook_reachable(target_webhook_url, reachability_timeout)
+            if not is_reachable:
+                return {"error": f"Agent '{agent}' webhook unreachable: {reachability_error}"}
 
     from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
     task_id = task_id or str(uuid.uuid4())
