@@ -1130,19 +1130,37 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
             "Content-Type": "application/json",
             "X-Hub-Signature-256": f"sha256={sig}",
         }
-        try:
-            import urllib.request
-            req = urllib.request.Request(
-                target_webhook_url,
-                data=body.encode(),
-                headers=headers,
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result = _json.loads(resp.read().decode())
-                delivery_id = result.get("delivery_id", "unknown")
-        except Exception as exc:
-            return {"error": f"Webhook to agent '{agent}' failed: {exc}"}
+        # Make retry logic configurable via environment variables
+        delivery_retries = int(os.getenv("A2A_WEBHOOK_DELIVERY_RETRIES", "3"))
+        delivery_backoff = float(os.getenv("A2A_WEBHOOK_DELIVERY_BACKOFF", "1.0"))
+        delivery_timeout = int(os.getenv("A2A_WEBHOOK_DELIVERY_TIMEOUT", "10"))
+        
+        import urllib.request
+        import logging
+        _logger = logging.getLogger(__name__)
+        
+        for attempt in range(delivery_retries):
+            try:
+                req = urllib.request.Request(
+                    target_webhook_url,
+                    data=body.encode(),
+                    headers=headers,
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=delivery_timeout) as resp:
+                    result = _json.loads(resp.read().decode())
+                    delivery_id = result.get("delivery_id", "unknown")
+                if attempt > 0:
+                    _logger.info("[a2a_send_session_message] Webhook delivery succeeded on attempt %d/%d", attempt + 1, delivery_retries)
+                break
+            except Exception as exc:
+                if attempt < delivery_retries - 1:
+                    backoff = delivery_backoff * (2 ** attempt)
+                    _logger.warning("[a2a_send_session_message] Webhook delivery attempt %d/%d failed: %s, retrying in %.1fs", attempt + 1, delivery_retries, exc, backoff)
+                    time.sleep(backoff)
+                else:
+                    _logger.error("[a2a_send_session_message] Webhook delivery failed after %d attempts: %s", delivery_retries, exc)
+                    return {"error": f"Webhook to agent '{agent}' failed after {delivery_retries} attempts: {exc}"}
     else:
         return {"error": f"Agent '{agent}' has no webhook_url in vault"}
 
