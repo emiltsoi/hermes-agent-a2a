@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import sys
 import subprocess
 import urllib.request
@@ -38,6 +39,12 @@ def test_registers_current_a2a_tools():
         "a2a_send_session_message",
     }
     assert all(entry["toolset"] == "a2a" for entry in registry.tools.values())
+
+
+def test_v3_tool_handlers_do_not_import_internal_platform_modules():
+    source = Path(tools.__file__).read_text()
+    assert "from .platforms" not in source
+    assert "TelegramHandler" not in source
 
 
 def test_help_exposes_registration_security_and_troubleshooting_topics():
