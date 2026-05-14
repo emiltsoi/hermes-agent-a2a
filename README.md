@@ -10,7 +10,7 @@
 | Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `tasks/send` and poll `tasks/get`. |
 | Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker. |
 | Hermes remote workers | `a2a_run_remote_agent_task` | Ask a remote Hermes A2A server to run its own ephemeral worker. |
-| Session relay | `a2a_send_session_message` | Send through Hermes gateway/session routing. |
+| Session relay | `a2a_send_session_message` | Send one-way through Hermes gateway/session routing and return delivery status. |
 | Registry | `~/.hermes/fleet/a2a/agents/<name>/identity.yaml` | Stores transport URLs and auth metadata. |
 | Help | `a2a_help` | In-band help for protocol, workers, sessions, external agents, security, and troubleshooting. |
 
@@ -25,6 +25,8 @@ The plugin registers the `a2a` toolset with these tools:
 - `a2a_run_local_agent_task`
 - `a2a_run_remote_agent_task`
 - `a2a_send_session_message`
+
+`a2a_send_session_message` is intentionally one-way: it delivers into the target Hermes session/gateway and returns relay status only. Use `a2a_send_protocol_task` when you need a pollable A2A task response.
 
 ## Install
 

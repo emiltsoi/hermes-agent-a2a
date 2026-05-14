@@ -6,6 +6,7 @@ import yaml
 from hermes_agent_a2a import schemas
 from hermes_agent_a2a import tool_handlers as tools
 from hermes_agent_a2a import tool_registry
+from hermes_agent_a2a.a2a_spec import build_hermes_metadata, build_task_cancel_payload, build_task_send_payload, parse_task_result
 from hermes_agent_a2a.identity import resolve_agent
 
 
@@ -167,3 +168,50 @@ def test_protocol_skill_metadata_and_validation():
 
     assert "not found" in result["error"]
     assert result["available_skills"] == ["summarize"]
+
+
+def test_a2a_spec_builds_protocol_task_payload_with_hermes_metadata():
+    payload = build_task_send_payload(
+        task_id="task-1",
+        message="hello",
+        sender_name="agent0",
+        skill="summarize",
+        hermes=build_hermes_metadata(route="protocol", execution="remote_a2a"),
+        request_id="rpc-1",
+    )
+
+    assert payload["jsonrpc"] == "2.0"
+    assert payload["method"] == "tasks/send"
+    assert payload["id"] == "rpc-1"
+    assert payload["params"]["message"]["metadata"]["skill"] == "summarize"
+    assert payload["params"]["message"]["metadata"]["hermes"]["route"] == "protocol"
+
+
+def test_a2a_spec_parses_artifacts_status_message_and_cancel_payload():
+    parsed = parse_task_result(
+        {
+            "id": "task-1",
+            "status": {"state": "completed", "message": {"parts": [{"type": "text", "text": "status"}]}},
+            "artifacts": [{"parts": [{"type": "text", "text": "artifact"}]}],
+        }
+    )
+
+    assert parsed["task_id"] == "task-1"
+    assert parsed["state"] == "completed"
+    assert parsed["response"] == "artifact\nstatus"
+    assert build_task_cancel_payload("task-1", request_id="rpc-cancel") == {
+        "jsonrpc": "2.0",
+        "id": "rpc-cancel",
+        "method": "tasks/cancel",
+        "params": {"id": "task-1"},
+    }
+
+
+def test_session_schema_and_help_are_explicitly_one_way():
+    description = schemas.A2A_TELEGRAM["description"]
+    help_text = "\n".join(tools.handle_help("sessions")["guidance"])
+
+    assert "one-way" in description
+    assert "delivery/relay status only" in description
+    assert "one-way" in help_text
+    assert "does not wait for or guarantee" in help_text

@@ -239,8 +239,9 @@ A2A_LIST = {
 A2A_TELEGRAM = {
     "name": "a2a_send_session_message",
     "description": (
-        "Send a message through a target Hermes gateway into its configured platform session context. "
+        "Send a one-way message through a target Hermes gateway into its configured platform session context. "
         "The target gateway owns session routing via config.yaml. "
+        "Returns delivery/relay status only; it does not wait for or guarantee the recipient's semantic reply. "
         "Also echoes the same message to the sender's own Telegram DM for visibility when configured. "
         "Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][cta:<cta>] header. "
         "Caller passes raw message; tool handles mesh metadata."
@@ -250,7 +251,7 @@ A2A_TELEGRAM = {
         "properties": {
             "message": {
                 "type": "string",
-                "description": "The message body to send into the target agent's configured session (header is auto-padded)",
+                "description": "The one-way message body to send into the target agent's configured session (header is auto-padded)",
             },
             "agent": {
                 "type": "string",

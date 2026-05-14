@@ -18,6 +18,16 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+from .a2a_spec.agent_card import validate_skill
+from .a2a_spec.hermes_ext import build_hermes_metadata
+from .a2a_spec.tasks import (
+    build_task_get_payload,
+    build_task_send_payload,
+    is_terminal_state,
+    parse_json_rpc_error,
+    parse_task_result,
+)
+
 logger = logging.getLogger(__name__)
 
 # Lazy callbacks injected by plugin.py during register()
@@ -92,9 +102,10 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
             "Worker tools are Hermes-specific and are not generic external A2A protocol operations.",
         ],
         "sessions": [
-            "a2a_send_session_message sends through the Hermes gateway/session relay.",
+            "a2a_send_session_message sends one-way through the Hermes gateway/session relay.",
             "Use it for human-visible or platform-routed conversations where config.yaml owns session routing.",
-            "It is separate from A2A protocol task state.",
+            "It returns delivery status only; it does not wait for or guarantee a semantic reply.",
+            "It is a Hermes extension to the A2A-shaped task model, not a standard request/response protocol task.",
         ],
         "external_agents": [
             "Start with a2a_discover(url='https://external-agent.example') to fetch the Agent Card.",
@@ -714,40 +725,6 @@ def _handle_call_mode3(
 # ----------------------------------------------------------------------
 
 
-def _extract_text_from_parts(parts) -> str:
-    chunks = []
-    for part in parts or []:
-        if not isinstance(part, dict):
-            continue
-        if part.get("type") == "text":
-            text = part.get("text", "")
-            if text:
-                chunks.append(str(text))
-        elif isinstance(part.get("text"), str):
-            chunks.append(part["text"])
-    return "\n".join(chunks).strip()
-
-
-def _extract_a2a_response_text(rpc_result: dict) -> str:
-    chunks = []
-    for artifact in rpc_result.get("artifacts", []) or []:
-        if isinstance(artifact, dict):
-            text = _extract_text_from_parts(artifact.get("parts", []))
-            if text:
-                chunks.append(text)
-    status_message = rpc_result.get("status", {}).get("message", {})
-    if isinstance(status_message, dict):
-        text = _extract_text_from_parts(status_message.get("parts", []))
-        if text:
-            chunks.append(text)
-    direct_message = rpc_result.get("message", {})
-    if isinstance(direct_message, dict):
-        text = _extract_text_from_parts(direct_message.get("parts", []))
-        if text:
-            chunks.append(text)
-    return "\n".join(chunks).strip()
-
-
 @_rate_limited
 def handle_send_protocol_task(
     name: Optional[str] = None,
@@ -787,14 +764,9 @@ def handle_send_protocol_task(
         resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
         allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
         if skill:
-            known_skills = agent_info.get("metadata", {}).get("skills", []) or agent_info.get("skills", [])
-            skill_names = {
-                str(item.get("name") or item.get("id") or "").lower()
-                for item in known_skills
-                if isinstance(item, dict)
-            }
-            if skill_names and skill.lower() not in skill_names:
-                return {"error": f"Skill '{skill}' not found for agent '{name}'", "available_skills": sorted(skill_names)}
+            valid_skill, available_skills = validate_skill(agent_info, skill)
+            if not valid_skill:
+                return {"error": f"Skill '{skill}' not found for agent '{name}'", "available_skills": available_skills}
         if not target_url:
             return {"error": f"Agent '{name}' has no a2a_url in vault"}
     else:
@@ -810,31 +782,18 @@ def handle_send_protocol_task(
     poll_interval = int(poll_interval or _POLL_INTERVAL)
     poll_attempts = int(poll_attempts or _POLL_MAX_ATTEMPTS)
     task_id = task_id or str(uuid.uuid4())
-    tid = str(uuid.uuid4())
     resolved_intent = intent or "consultation"
     resolved_action = expected_action or "reply"
 
-    payload = {
-        "jsonrpc": "2.0",
-        "id": tid,
-        "method": "tasks/send",
-        "params": {
-            "id": task_id,
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": message}],
-                "metadata": {
-                    "intent": resolved_intent,
-                    "expected_action": resolved_action,
-                    "context_scope": "full",
-                    "sender_name": os.getenv("A2A_AGENT_NAME", "hermes-agent"),
-                },
-            },
-        },
-    }
-    if skill:
-        payload["params"]["message"]["metadata"]["skill"] = skill
-        payload["params"]["metadata"] = {"skill": skill}
+    payload = build_task_send_payload(
+        task_id=task_id,
+        message=message,
+        sender_name=os.getenv("A2A_AGENT_NAME", "hermes-agent"),
+        intent=resolved_intent,
+        expected_action=resolved_action,
+        skill=skill,
+        hermes=build_hermes_metadata(route="protocol", execution="remote_a2a"),
+    )
 
     headers = _auth_headers(resolved_auth)
 
@@ -852,40 +811,36 @@ def handle_send_protocol_task(
     except Exception as e:
         error_msg = f"Call failed: {e}"
     else:
-        rpc_error = result.get("error")
-        if rpc_error:
-            err_msg = rpc_error.get("message", str(rpc_error)) if isinstance(rpc_error, dict) else str(rpc_error)
+        err_msg = parse_json_rpc_error(result)
+        if err_msg:
             error_msg = f"Remote agent error: {err_msg}"
         else:
             rpc_result = result.get("result", {}) or {}
-            task_state = rpc_result.get("status", {}).get("state", "unknown")
-            remote_task_id = rpc_result.get("id", task_id)
+            parsed = parse_task_result(rpc_result, default_task_id=task_id)
+            task_state = parsed["state"]
+            remote_task_id = parsed["task_id"]
 
             if task_state in ("working", "submitted") and remote_task_id and poll_attempts > 0:
-                poll_payload = {
-                    "jsonrpc": "2.0",
-                    "id": str(uuid.uuid4()),
-                    "method": "tasks/get",
-                    "params": {"id": remote_task_id},
-                }
+                poll_payload = build_task_get_payload(remote_task_id)
                 for attempt in range(poll_attempts):
                     time.sleep(max(0, poll_interval))
                     try:
                         poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers, timeout=timeout)
-                        poll_error = poll_result.get("error")
-                        if poll_error:
+                        if parse_json_rpc_error(poll_result):
                             continue
                         poll_inner = poll_result.get("result", {}) or {}
-                        poll_state = poll_inner.get("status", {}).get("state", "")
-                        if poll_state:
+                        poll_parsed = parse_task_result(poll_inner, default_task_id=remote_task_id)
+                        poll_state = poll_parsed["state"]
+                        if poll_state and poll_state != "unknown":
                             rpc_result = poll_inner
                             task_state = poll_state
-                        if poll_state in ("completed", "failed", "canceled", "rejected"):
+                        if is_terminal_state(poll_state):
                             break
                     except Exception:
                         continue
 
-            response_text = _extract_a2a_response_text(rpc_result)
+            parsed = parse_task_result(rpc_result, default_task_id=task_id)
+            response_text = parsed["response"]
 
     if error_msg:
         return {"error": error_msg}
