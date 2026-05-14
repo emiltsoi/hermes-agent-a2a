@@ -5,13 +5,14 @@ import logging
 from . import schemas
 from .tool_handlers import (
     _dict_args_handler,
+    handle_cancel_protocol_task,
     handle_discover,
-    handle_help,
     handle_list,
     handle_run_local_agent_task,
     handle_run_remote_agent_task,
     handle_send_protocol_task,
     handle_send_session_message,
+    handle_help,
     set_runtime_callbacks,
 )
 
@@ -43,6 +44,12 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         toolset="a2a",
         schema=schemas.A2A_CALL,
         handler=_dict_args_handler(handle_send_protocol_task),
+    )
+    registry.register_tool(
+        name=schemas.A2A_CANCEL_PROTOCOL_TASK["name"],
+        toolset="a2a",
+        schema=schemas.A2A_CANCEL_PROTOCOL_TASK,
+        handler=_dict_args_handler(handle_cancel_protocol_task),
     )
     registry.register_tool(
         name=schemas.A2A_RUN_LOCAL_AGENT_TASK["name"],

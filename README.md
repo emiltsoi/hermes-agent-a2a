@@ -22,6 +22,7 @@ The plugin registers the `a2a` toolset with these tools:
 - `a2a_discover`
 - `a2a_list`
 - `a2a_send_protocol_task`
+- `a2a_cancel_protocol_task`
 - `a2a_run_local_agent_task`
 - `a2a_run_remote_agent_task`
 - `a2a_send_session_message`
@@ -147,6 +148,40 @@ Use protocol tasks for external A2A agents. Use worker tools only for Hermes-man
 a2a_run_local_agent_task(name="agent1", message="Work locally", timeout=300)
 a2a_run_remote_agent_task(name="agent1", message="Work on your host", timeout=300)
 ```
+
+## Hermes session routing requirement
+
+`a2a_send_session_message` is a one-way Hermes session relay. It posts webhook text to the target Hermes agent; the target agent's `config.yaml` must route inbound webhook text into the desired platform/session.
+
+Target profiles need plugin/toolset activation plus gateway webhook/session routing. Exact gateway keys may vary by Hermes version, but the required shape is:
+
+```yaml
+toolsets:
+  - a2a
+
+plugins:
+  enabled:
+    - hermes-agent-a2a
+
+gateway:
+  webhook:
+    enabled: true
+    target_session: default
+    deliver_extra: true
+```
+
+The target identity also needs a webhook transport so peers know where to deliver:
+
+```yaml
+transports:
+  hermes_webhook:
+    url: https://target.example/hermes/webhook
+    auth:
+      type: hmac
+      secret_env: TARGET_HERMES_WEBHOOK_SECRET
+```
+
+Without this routing, `a2a_send_session_message` may reach the webhook but not land in the intended Hermes session. Use `a2a_send_protocol_task` when you need a pollable A2A task result.
 
 ## Runtime environment
 

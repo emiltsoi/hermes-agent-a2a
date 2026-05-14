@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from .a2a_spec.agent_card import validate_skill
 from .a2a_spec.hermes_ext import build_hermes_metadata
 from .a2a_spec.tasks import (
+    build_task_cancel_payload,
     build_task_get_payload,
     build_task_send_payload,
     is_terminal_state,
@@ -80,6 +81,7 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
         "a2a_list": "List agents in the local Hermes A2A fleet identity registry.",
         "a2a_discover": "Fetch an Agent Card from a known fleet agent or direct external A2A URL.",
         "a2a_send_protocol_task": "Send a real A2A protocol task over tasks/send and poll tasks/get.",
+        "a2a_cancel_protocol_task": "Cancel a protocol task with tasks/cancel.",
         "a2a_run_local_agent_task": "Run a target Hermes profile as an ephemeral worker on the caller machine.",
         "a2a_run_remote_agent_task": "Ask a target Hermes agent to spawn an ephemeral worker on the target machine.",
         "a2a_send_session_message": "Send through a target Hermes gateway into its configured platform/session context.",
@@ -93,6 +95,7 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
         ],
         "protocol": [
             "a2a_send_protocol_task uses JSON-RPC tasks/send and tasks/get.",
+            "a2a_cancel_protocol_task uses JSON-RPC tasks/cancel for cancelable remote tasks.",
             "It is the compatibility path for A2A-style agents and the path to expand for external agents.",
             "It accepts either name from the fleet registry or a direct url.",
         ],
@@ -103,6 +106,7 @@ def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dic
         ],
         "sessions": [
             "a2a_send_session_message sends one-way through the Hermes gateway/session relay.",
+            "The target Hermes profile must configure session/webhook routing in config.yaml so inbound webhook text reaches the intended platform/session.",
             "Use it for human-visible or platform-routed conversations where config.yaml owns session routing.",
             "It returns delivery status only; it does not wait for or guarantee a semantic reply.",
             "It is a Hermes extension to the A2A-shaped task model, not a standard request/response protocol task.",
@@ -659,7 +663,7 @@ def _handle_call_mode3(
         return {"error": f"Agent '{name}' not found in vault registry"}
     a2a_rpc = _transport(agent_info, "a2a_rpc")
     target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-    auth_token = _transport_auth_value(a2a_rpc, "token") or agent_info.get("auth_token", "")
+    resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
     if not target_url:
         return {"error": f"Agent '{name}' has no a2a_url in vault"}
 
@@ -669,55 +673,42 @@ def _handle_call_mode3(
         return {"error": str(e)}
 
     task_id = task_id or str(uuid.uuid4())
-    tid = str(uuid.uuid4())
+    hermes = build_hermes_metadata(route="worker", execution="remote_subprocess", isolation="target_profile")
+    payload = build_task_send_payload(
+        task_id=task_id,
+        message=message,
+        sender_name=os.getenv("A2A_AGENT_NAME", "hermes-agent"),
+        intent="consultation",
+        expected_action="reply",
+        hermes=hermes,
+    )
+    payload["params"]["message"]["metadata"]["worker_at"] = "target"
+    payload["params"]["message"]["metadata"]["timeout"] = timeout
+    payload["params"]["timeout"] = timeout
 
-    payload = {
-        "jsonrpc": "2.0",
-        "id": tid,
-        "method": "tasks/send",
-        "params": {
-            "id": task_id,
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": message}],
-                "metadata": {
-                    "intent": "consultation",
-                    "expected_action": "reply",
-                    "context_scope": "full",
-                    "sender_name": os.getenv("A2A_AGENT_NAME", "hermes-agent"),
-                    "worker_at": "target",
-                    "timeout": timeout,
-                },
-            },
-            "timeout": timeout,
-        },
-    }
-
-    headers = {"Content-Type": "application/json"}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
+    headers = _auth_headers(resolved_auth)
 
     try:
         result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout)
     except Exception as exc:
         return {"error": f"Mode 3 HTTP error: {exc}"}
 
-    rpc_result = result.get("result", {})
-    artifacts = rpc_result.get("artifacts", [])
-    if artifacts:
-        for artifact in artifacts:
-            for part in artifact.get("parts", []):
-                if part.get("type") == "text":
-                    return {
-                        "task_id": task_id,
-                        "state": rpc_result.get("status", {}).get("state", "completed"),
-                        "response": part.get("text", ""),
-                        "source": f"ephemeral:{name}",
-                        "mode": "3",
-                    }
+    err_msg = parse_json_rpc_error(result)
+    if err_msg:
+        return {"error": f"Mode 3 remote agent error: {err_msg}"}
 
-    status_state = rpc_result.get("status", {}).get("state", "unknown")
-    return {"error": f"Mode 3: target returned status={status_state}"}
+    parsed = parse_task_result(result.get("result", {}) or {}, default_task_id=task_id)
+    if parsed["response"]:
+        return {
+            "task_id": parsed["task_id"],
+            "state": parsed["state"],
+            "response": parsed["response"],
+            "source": f"ephemeral:{name}",
+            "mode": "3",
+            "hermes": hermes,
+        }
+
+    return {"error": f"Mode 3: target returned status={parsed['state']}"}
 
 
 # ----------------------------------------------------------------------
@@ -875,6 +866,67 @@ def handle_run_remote_agent_task(
     return _handle_call_mode3(name=name or "", message=message, task_id=task_id, timeout=int(timeout or 300))
 
 
+@_rate_limited
+def handle_cancel_protocol_task(
+    name: Optional[str] = None,
+    url: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    auth_header: Optional[str] = None,
+    auth_value: Optional[str] = None,
+    task_id: str = "",
+    timeout: int = _DEFAULT_TIMEOUT,
+    user_task: Optional[str] = None,
+) -> dict:
+    if not task_id:
+        return {"error": "'task_id' is required"}
+    if not url and not name:
+        return {"error": "Provide either 'url' or 'name'"}
+
+    resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
+    if name:
+        agent_info = _resolve_agent_by_name(name)
+        if not agent_info:
+            return {"error": f"Agent '{name}' not found in vault registry"}
+        a2a_rpc = _transport(agent_info, "a2a_rpc")
+        target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
+        resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
+        allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
+        if not target_url:
+            return {"error": f"Agent '{name}' has no a2a_url in vault"}
+    else:
+        target_url = url
+        allow_loopback = False
+
+    try:
+        target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    try:
+        result = _http_request(
+            "POST",
+            target_url.rstrip("/"),
+            json_body=build_task_cancel_payload(task_id),
+            headers=_auth_headers(resolved_auth),
+            timeout=int(timeout or _DEFAULT_TIMEOUT),
+        )
+    except Exception as exc:
+        return {"error": f"Cancel failed: {exc}"}
+
+    err_msg = parse_json_rpc_error(result)
+    if err_msg:
+        return {"error": f"Remote agent error: {err_msg}"}
+    parsed = parse_task_result(result.get("result", {}) or {}, default_task_id=task_id)
+    return {
+        "task_id": parsed["task_id"],
+        "state": parsed["state"],
+        "response": parsed["response"] or "(no text response)",
+        "source": target_url,
+        "raw_result": parsed["raw_result"],
+    }
+
+
 # ----------------------------------------------------------------------
 # Tool: session message
 # ----------------------------------------------------------------------
@@ -1002,66 +1054,3 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     }
 
 
-# ----------------------------------------------------------------------
-# Registration
-# ----------------------------------------------------------------------
-
-
-def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
-    """Register all A2A tools with the Hermes gateway registry.
-
-    Args:
-        registry: Hermes plugin registry
-        ensure_server: Callback to start the A2A server (lazy init)
-        get_vault_resolver: Callable returning a VaultResolver instance
-    """
-    from . import schemas
-
-    # Store callbacks for lazy startup
-    global _ensure_server, _get_vault_resolver
-    _ensure_server = ensure_server
-    _get_vault_resolver = get_vault_resolver
-
-    registry.register_tool(
-        name=schemas.A2A_HELP["name"],
-        toolset="a2a",
-        schema=schemas.A2A_HELP,
-        handler=_dict_args_handler(handle_help),
-    )
-    registry.register_tool(
-        name=schemas.A2A_DISCOVER["name"],
-        toolset="a2a",
-        schema=schemas.A2A_DISCOVER,
-        handler=_dict_args_handler(handle_discover),
-    )
-    registry.register_tool(
-        name=schemas.A2A_LIST["name"],
-        toolset="a2a",
-        schema=schemas.A2A_LIST,
-        handler=_dict_args_handler(handle_list),
-    )
-    registry.register_tool(
-        name=schemas.A2A_CALL["name"],
-        toolset="a2a",
-        schema=schemas.A2A_CALL,
-        handler=_dict_args_handler(handle_send_protocol_task),
-    )
-    registry.register_tool(
-        name=schemas.A2A_RUN_LOCAL_AGENT_TASK["name"],
-        toolset="a2a",
-        schema=schemas.A2A_RUN_LOCAL_AGENT_TASK,
-        handler=_dict_args_handler(handle_run_local_agent_task),
-    )
-    registry.register_tool(
-        name=schemas.A2A_RUN_REMOTE_AGENT_TASK["name"],
-        toolset="a2a",
-        schema=schemas.A2A_RUN_REMOTE_AGENT_TASK,
-        handler=_dict_args_handler(handle_run_remote_agent_task),
-    )
-    registry.register_tool(
-        name=schemas.A2A_TELEGRAM["name"],
-        toolset="a2a",
-        schema=schemas.A2A_TELEGRAM,
-        handler=handle_send_session_message,
-    )
-    logger.info("[A2A] Phase 3 tools registered")

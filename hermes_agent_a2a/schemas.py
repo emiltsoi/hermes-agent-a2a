@@ -168,6 +168,53 @@ A2A_CALL = {
     },
 }
 
+A2A_CANCEL_PROTOCOL_TASK = {
+    "name": "a2a_cancel_protocol_task",
+    "description": (
+        "Cancel an A2A protocol task by sending JSON-RPC tasks/cancel to a named registry agent or direct URL. "
+        "This is the standard protocol cancellation path and may also cancel Hermes remote workers when the target supports it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Name of an agent from the A2A fleet identity registry",
+            },
+            "url": {
+                "type": "string",
+                "description": "Base URL or JSON-RPC endpoint of the remote A2A agent",
+            },
+            "task_id": {
+                "type": "string",
+                "description": "Task ID to cancel",
+            },
+            "auth_token": {
+                "type": "string",
+                "description": "Optional bearer token for direct external A2A URL calls",
+            },
+            "auth_type": {
+                "type": "string",
+                "enum": ["none", "bearer", "api_key", "custom_header"],
+                "description": "Optional auth mode for direct external A2A URL calls",
+            },
+            "auth_header": {
+                "type": "string",
+                "description": "Header name for api_key/custom_header auth",
+            },
+            "auth_value": {
+                "type": "string",
+                "description": "Secret value for api_key/custom_header auth",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "HTTP timeout in seconds for the cancel request (default: 120)",
+            },
+        },
+        "required": ["task_id"],
+    },
+}
+
 A2A_RUN_LOCAL_AGENT_TASK = {
     "name": "a2a_run_local_agent_task",
     "description": (

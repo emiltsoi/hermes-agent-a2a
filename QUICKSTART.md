@@ -124,6 +124,40 @@ a2a_run_local_agent_task(name="agent1", message="Analyze this", timeout=300)
 a2a_run_remote_agent_task(name="agent1", message="Analyze this on your host", timeout=300)
 ```
 
+## 10. Configure session routing for `a2a_send_session_message`
+
+`a2a_send_session_message` is a one-way Hermes session relay. The receiving Hermes profile must route inbound webhook text to a configured session/platform in its `config.yaml`.
+
+Example target-profile shape:
+
+```yaml
+toolsets:
+  - a2a
+
+plugins:
+  enabled:
+    - hermes-agent-a2a
+
+gateway:
+  webhook:
+    enabled: true
+    target_session: default
+    deliver_extra: true
+```
+
+The target agent identity must also expose a webhook transport:
+
+```yaml
+transports:
+  hermes_webhook:
+    url: https://target.example/hermes/webhook
+    auth:
+      type: hmac
+      secret_env: TARGET_HERMES_WEBHOOK_SECRET
+```
+
+Without this routing, the webhook can receive the message but the target Hermes gateway may not deliver it into the desired session.
+
 ## Troubleshooting
 
 ```text

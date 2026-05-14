@@ -365,14 +365,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         user_text = sanitize_inbound(user_text)
         metadata = message.get("metadata", {})
+        hermes_meta = metadata.get("hermes", {}) if isinstance(metadata.get("hermes", {}), dict) else {}
         worker_at = metadata.get("worker_at", "")
 
         # worker_at=target: distributed ephemeral worker — bypass queue, webhook,
         # task.ready.wait(). Run local worker directly and return result synchronously.
-        if worker_at == "target":
+        if worker_at == "target" or hermes_meta.get("execution") == "remote_subprocess":
             import logging as _log
             _log.getLogger(__name__).info("[A2A] worker_at=target — dispatching to _handle_task_send_mode3")
-            from .tools import _handle_task_send_mode3
+            from .tool_handlers import _handle_task_send_mode3
             return _handle_task_send_mode3(params, metadata, user_text)
 
         if "sender_name" not in metadata:

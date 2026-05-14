@@ -28,6 +28,7 @@ def test_registers_current_a2a_tools():
         "a2a_discover",
         "a2a_list",
         "a2a_send_protocol_task",
+        "a2a_cancel_protocol_task",
         "a2a_run_local_agent_task",
         "a2a_run_remote_agent_task",
         "a2a_send_session_message",
@@ -168,6 +169,37 @@ def test_protocol_skill_metadata_and_validation():
 
     assert "not found" in result["error"]
     assert result["available_skills"] == ["summarize"]
+
+
+def test_cancel_protocol_task_posts_tasks_cancel():
+    with patch.object(
+        tools,
+        "_http_request",
+        return_value={"result": {"id": "task-1", "status": {"state": "canceled"}}},
+    ) as http:
+        result = tools.handle_cancel_protocol_task(url="https://external.example/rpc", task_id="task-1")
+
+    assert result["state"] == "canceled"
+    payload = http.call_args.kwargs["json_body"]
+    assert payload["method"] == "tasks/cancel"
+    assert payload["params"]["id"] == "task-1"
+
+
+def test_remote_worker_uses_hermes_remote_subprocess_metadata():
+    agent = {"transports": {"a2a_rpc": {"url": "https://worker.example/rpc"}}}
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+        tools,
+        "_http_request",
+        return_value={"result": {"id": "task-1", "status": {"state": "completed"}, "artifacts": [{"parts": [{"type": "text", "text": "done"}]}]}},
+    ) as http:
+        result = tools.handle_run_remote_agent_task(name="worker", message="do it", task_id="task-1")
+
+    assert result["response"] == "done"
+    payload = http.call_args.kwargs["json_body"]
+    hermes = payload["params"]["message"]["metadata"]["hermes"]
+    assert hermes["route"] == "worker"
+    assert hermes["execution"] == "remote_subprocess"
+    assert payload["params"]["message"]["metadata"]["worker_at"] == "target"
 
 
 def test_a2a_spec_builds_protocol_task_payload_with_hermes_metadata():
