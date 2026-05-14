@@ -1,0 +1,111 @@
+import os
+from unittest.mock import patch
+
+import yaml
+
+from hermes_agent_a2a import schemas
+from hermes_agent_a2a import tool_handlers as tools
+from hermes_agent_a2a.identity import resolve_agent
+
+
+class FakeRegistry:
+    def __init__(self):
+        self.tools = {}
+
+    def register_tool(self, name, toolset, schema, handler):
+        self.tools[name] = {"toolset": toolset, "schema": schema, "handler": handler}
+
+
+def test_registers_current_a2a_tools():
+    registry = FakeRegistry()
+
+    tools.register(registry)
+
+    assert set(registry.tools) == {
+        "a2a_help",
+        "a2a_discover",
+        "a2a_list",
+        "a2a_send_protocol_task",
+        "a2a_run_local_agent_task",
+        "a2a_run_remote_agent_task",
+        "a2a_send_session_message",
+    }
+    assert all(entry["toolset"] == "a2a" for entry in registry.tools.values())
+
+
+def test_help_exposes_registration_security_and_troubleshooting_topics():
+    result = tools.handle_help("overview")
+
+    assert "register_external" in result["topics"]
+    assert "security" in result["topics"]
+    assert "troubleshooting" in result["topics"]
+
+
+def test_discover_can_register_external_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("A2A_VAULT_PATH", str(tmp_path))
+    card = {
+        "name": "External Demo",
+        "description": "demo",
+        "version": "1",
+        "skills": [{"name": "chat", "description": "Chat"}],
+        "capabilities": {"streaming": False},
+    }
+
+    with patch.object(tools, "_http_request", return_value=card):
+        result = tools.handle_discover(
+            url="https://external.example",
+            agent_card_path="agent-card.json",
+            auth_type="api_key",
+            auth_header="X-API-Key",
+            auth_value="runtime-secret",
+            register=True,
+            register_as="External Demo",
+            rpc_url="https://external.example/rpc",
+            auth_value_env="EXTERNAL_DEMO_KEY",
+        )
+
+    assert result["registration"]["registered"] is True
+    identity_path = tmp_path / "a2a" / "agents" / "external-demo" / "identity.yaml"
+    identity = yaml.safe_load(identity_path.read_text())
+    assert identity["transports"]["a2a_rpc"]["url"] == "https://external.example/rpc"
+    assert identity["transports"]["a2a_rpc"]["auth"] == {
+        "type": "api_key",
+        "header": "X-API-Key",
+        "value_env": "EXTERNAL_DEMO_KEY",
+    }
+    assert resolve_agent("external-demo")["transports"]["agent_card"]["path"] == "/agent-card.json"
+
+
+def test_direct_auth_headers_support_bearer_api_key_and_custom_header():
+    assert tools._auth_headers({"type": "bearer", "token": "t"}) == {"Authorization": "Bearer t"}
+    assert tools._auth_headers({"type": "api_key", "header": "X-Key", "value": "v"}) == {"X-Key": "v"}
+    assert tools._auth_headers({"type": "custom_header", "header": "X-Auth", "value": "v"}) == {"X-Auth": "v"}
+
+
+def test_named_loopback_requires_explicit_allow_loopback():
+    agent = {"transports": {"a2a_rpc": {"url": "http://127.0.0.1:8081"}}}
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
+        result = tools.handle_send_protocol_task(name="local", message="hello")
+    assert "loopback" in result["error"]
+
+    agent["transports"]["a2a_rpc"]["allow_loopback"] = True
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+        tools,
+        "_http_request",
+        return_value={
+            "result": {
+                "id": "task",
+                "status": {"state": "completed"},
+                "artifacts": [{"parts": [{"type": "text", "text": "ok"}]}],
+            }
+        },
+    ):
+        result = tools.handle_send_protocol_task(name="local", message="hello")
+    assert result["response"] == "ok"
+
+
+def test_schemas_include_external_registration_parameters():
+    props = schemas.A2A_DISCOVER["parameters"]["properties"]
+
+    for key in ["register", "register_as", "rpc_url", "auth_token_env", "auth_value_env", "register_overwrite"]:
+        assert key in props

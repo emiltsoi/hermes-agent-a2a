@@ -88,12 +88,6 @@ class HermesAgentA2APlugin:
         except Exception as exc:
             logger.debug("Error shutting down A2A server: %s", exc)
 
-
-class HermesA2AV2Plugin(HermesA2AV3Plugin):
-    """Alias for backward compatibility with existing integrations."""
-    pass
-
-
 def register(registry) -> None:
     """Entry point for hermes plugin system."""
     plugin = HermesAgentA2APlugin()
