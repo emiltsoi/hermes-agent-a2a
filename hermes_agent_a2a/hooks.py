@@ -143,20 +143,18 @@ def pre_gateway_dispatch(event: str, **kwargs) -> str:
     m = _A2A_TRIGGER_RE.match(event_text)
     if m:
         task_id = m.group(1)
-        with queue._lock:
-            for t in list(queue._pending.values()) + list(queue._completed.values()):
-                if t.task_id == task_id:
-                    return f"[A2A trigger]<{task_id}>|<{t.metadata.get('sender_name','?')}>|{t.text}"
+        t = queue.find_task_by_id(task_id)
+        if t:
+            return f"[A2A trigger]<{task_id}>|<{t.metadata.get('sender_name','?')}>|{t.text}"
         return event_text
 
     # Fallback: legacy comma format
     m2 = _A2A_TRIGGER_LEGACY_RE.match(event_text)
     if m2:
         task_id = m2.group(1)
-        with queue._lock:
-            for t in list(queue._pending.values()) + list(queue._completed.values()):
-                if t.task_id == task_id:
-                    return f"[A2A trigger]<{task_id}>|<{t.metadata.get('sender_name','?')}>|{t.text}"
+        t = queue.find_task_by_id(task_id)
+        if t:
+            return f"[A2A trigger]<{task_id}>|<{t.metadata.get('sender_name','?')}>|{t.text}"
         return event_text
 
     return event_text

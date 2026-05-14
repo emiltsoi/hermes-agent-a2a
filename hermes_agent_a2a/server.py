@@ -145,6 +145,15 @@ class TaskQueue:
         with self._lock:
             return list(self._processing)
 
+    def find_task_by_id(self, task_id: str) -> Optional[_PendingTask]:
+        """Find a task by ID across pending and completed (public API for hooks)."""
+        with self._lock:
+            if task_id in self._pending:
+                return self._pending[task_id]
+            if task_id in self._completed:
+                return self._completed[task_id]
+        return None
+
 
 def get_runtime_state() -> dict:
     """Expose the process-wide runtime state to the plugin loader.
