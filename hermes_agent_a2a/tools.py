@@ -50,6 +50,63 @@ _RATE_LIMIT_MAX_CALLS = 30
 _call_timestamps: deque[float] = deque()
 _rate_lock = threading.Lock()
 
+
+def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dict:
+    topic = (topic or "overview").strip().lower()
+    tools = {
+        "a2a_help": "Show this guide.",
+        "a2a_list": "List agents in the local Hermes A2A fleet identity registry.",
+        "a2a_discover": "Fetch an Agent Card from a known fleet agent or direct external A2A URL.",
+        "a2a_send_protocol_task": "Send a real A2A protocol task over tasks/send and poll tasks/get.",
+        "a2a_run_local_agent_task": "Run a target Hermes profile as an ephemeral worker on the caller machine.",
+        "a2a_run_remote_agent_task": "Ask a target Hermes agent to spawn an ephemeral worker on the target machine.",
+        "a2a_send_session_message": "Send through a target Hermes gateway into its configured platform/session context.",
+    }
+    guidance = {
+        "overview": [
+            "Use a2a_send_protocol_task for the actual A2A protocol path.",
+            "Use a2a_run_local_agent_task or a2a_run_remote_agent_task for Hermes-specific ephemeral workers.",
+            "Use a2a_send_session_message when you need the target gateway/session context rather than protocol task state.",
+            "Use a2a_discover before protocol calls, especially for external agents.",
+        ],
+        "protocol": [
+            "a2a_send_protocol_task uses JSON-RPC tasks/send and tasks/get.",
+            "It is the compatibility path for A2A-style agents and the path to expand for external agents.",
+            "It accepts either name from the fleet registry or a direct url.",
+        ],
+        "workers": [
+            "a2a_run_local_agent_task runs the target profile locally and requires that profile on the caller filesystem.",
+            "a2a_run_remote_agent_task calls the target A2A server and asks it to run a target-side worker.",
+            "Worker tools are Hermes-specific and are not generic external A2A protocol operations.",
+        ],
+        "sessions": [
+            "a2a_send_session_message sends through the Hermes gateway/session relay.",
+            "Use it for human-visible or platform-routed conversations where config.yaml owns session routing.",
+            "It is separate from A2A protocol task state.",
+        ],
+        "external_agents": [
+            "Start with a2a_discover(url='https://external-agent.example') to fetch the Agent Card.",
+            "Then use a2a_send_protocol_task(url='https://external-agent.example', message='...').",
+            "External-agent support should extend the protocol path, not the Hermes worker tools.",
+            "Future work: richer Agent Card skill selection, auth negotiation, streaming, and non-Hermes task states.",
+        ],
+        "examples": [
+            "a2a_discover(name='yoyo')",
+            "a2a_send_protocol_task(name='yoyo', message='Review this plan')",
+            "a2a_run_local_agent_task(name='yoyo', message='Think locally', timeout=300)",
+            "a2a_run_remote_agent_task(name='yoyo', message='Think on your own machine', timeout=300)",
+            "a2a_send_session_message(agent='yoyo', message='Please reply in your active session')",
+            "a2a_discover(url='https://external-agent.example')",
+        ],
+    }
+    return {
+        "topic": topic,
+        "tools": tools,
+        "guidance": guidance.get(topic, guidance["overview"]),
+        "topics": sorted(guidance.keys()),
+    }
+
+
 # ----------------------------------------------------------------------
 # Helpers (kept from v1, paths updated to HERMES_HOME)
 # ----------------------------------------------------------------------
@@ -740,6 +797,12 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
     _ensure_server = ensure_server
     _get_vault_resolver = get_vault_resolver
 
+    registry.register_tool(
+        name=schemas.A2A_HELP["name"],
+        toolset="a2a",
+        schema=schemas.A2A_HELP,
+        handler=_dict_args_handler(handle_help),
+    )
     registry.register_tool(
         name=schemas.A2A_DISCOVER["name"],
         toolset="a2a",

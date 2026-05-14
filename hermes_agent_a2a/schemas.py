@@ -1,5 +1,24 @@
 """A2A tool schemas — what the LLM sees."""
 
+A2A_HELP = {
+    "name": "a2a_help",
+    "description": (
+        "Explain the hermes-agent-a2a toolset, when to use each A2A tool, "
+        "and how Hermes fleet calls differ from external A2A protocol calls."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "enum": ["overview", "protocol", "workers", "sessions", "external_agents", "examples"],
+                "description": "Optional help topic to focus on",
+                "default": "overview",
+            },
+        },
+    },
+}
+
 A2A_DISCOVER = {
     "name": "a2a_discover",
     "description": (
