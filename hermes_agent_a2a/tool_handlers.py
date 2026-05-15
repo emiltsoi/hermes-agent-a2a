@@ -613,6 +613,10 @@ def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None) 
     """Return all agents registered in the vault registry.
 
     Uses VaultResolver.list_agents() to enumerate $HERMES_HOME/profiles/*/a2a/vault.yaml.
+
+    Args:
+        task_id: Optional task correlation ID (passed through, not used for filtering).
+        user_task: Optional user task label (passed through, not used for filtering).
     """
     agents = _list_agents()
     return {
@@ -1306,7 +1310,12 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
 
 def handle_get_metrics(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
-    """Get current A2A plugin metrics."""
+    """Get current A2A plugin metrics.
+
+    Args:
+        task_id: Optional task correlation ID (passed through, not used for filtering).
+        user_task: Optional user task label (passed through, not used for filtering).
+    """
     from .runtime_state import get_runtime_state as get_state
     return get_state().get_metrics().get_metrics()
 
