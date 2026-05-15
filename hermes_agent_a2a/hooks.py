@@ -116,7 +116,7 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
             logger.info("[A2A hooks] Completed processing task %s", tid)
 
 
-# Matches "[A2A trigger]<task_id>|<sender>|<text>"
+# Matches "[A2A trigger]<task_id>|<sender>|<text>" and extracts task_id
 _A2A_TRIGGER_RE = re.compile(r"^\[A2A trigger\]<([^|]+)\|")
 
 # Legacy comma-style trigger: "[A2A trigger]<task_id>,<sender>,<text>"
