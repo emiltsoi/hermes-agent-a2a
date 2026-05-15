@@ -1179,7 +1179,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
     from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
     task_id = task_id or str(uuid.uuid4())
-    msg_id = task_id[:12]
+    msg_id = task_id
     hermes = build_hermes_metadata(route="session", execution="gateway_session", delivery="one_way", reply_mode="none")
     envelope = build_task_send_payload(
         task_id=task_id,
