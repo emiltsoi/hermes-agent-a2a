@@ -218,6 +218,7 @@ def handle_help(topic: str = "overview") -> dict:
             "Use it for human-visible or platform-routed conversations where config.yaml owns session routing.",
             "It returns delivery status only; it does not wait for or guarantee a semantic reply.",
             "It is a Hermes extension to the A2A-shaped task model, not a standard request/response protocol task.",
+            "CTA is 2D: action (do|info) + reply (yes|no). Action: do (take action) | info (log/acknowledge). Reply: yes (expects reply) | no (fire-and-forget).",
         ],
         "external_agents": [
             "Start with a2a_discover(url='https://external-agent.example') to fetch the Agent Card.",
@@ -1119,7 +1120,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     invokes the target agent. Also echoes the same padded message to the
     sender's own Telegram DM for operator visibility when sender Telegram
     credentials are available.
-    Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][cta:<cta>] header.
+    Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][action:<action>][reply:<reply>] header.
     Caller passes raw message; tool handles mesh metadata. No response returned.
 
     Supports two call conventions:
@@ -1134,7 +1135,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
     message = merged.get("message", "")
     agent = merged.get("agent", "")
-    cta = merged.get("cta", "reply")
+    action = merged.get("action", "do")
+    reply = merged.get("reply", "yes")
     ref = merged.get("ref")
     task_id = merged.get("task_id")
     user_task = merged.get("user_task")
@@ -1204,7 +1206,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         expected_action="acknowledge",
         hermes=hermes,
     )
-    header = f"[a2a][from:{from_agent}][to:{agent}][id:{msg_id}][cta:{cta}]"
+    header = f"[a2a][from:{from_agent}][to:{agent}][id:{msg_id}][action:{action}][reply:{reply}]"
     if ref:
         header += f"[ref:{ref}]"
     padded_message = f"{header} {message}"

@@ -294,7 +294,7 @@ A2A_TELEGRAM = {
         "The target gateway owns session routing via config.yaml. "
         "Returns delivery/relay status only; it does not wait for or guarantee the recipient's semantic reply. "
         "Also echoes the same message to the sender's own Telegram DM for visibility when configured. "
-        "Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][cta:<cta>] header. "
+        "Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][action:<action>][reply:<reply>] header. "
         "Caller passes raw message; tool handles mesh metadata."
     ),
     "parameters": {
@@ -308,10 +308,17 @@ A2A_TELEGRAM = {
                 "type": "string",
                 "description": "Name of the target Hermes mesh peer (e.g. daji, yoyo, jessie, agent0)",
             },
-            "cta": {
+            "action": {
                 "type": "string",
-                "description": "Call-to-action: reply | ack | nop (default: reply)",
-                "default": "reply",
+                "enum": ["do", "info"],
+                "description": "Action type: do (recipient should take action) | info (information only, log or acknowledge)",
+                "default": "do",
+            },
+            "reply": {
+                "type": "string",
+                "enum": ["yes", "no"],
+                "description": "Reply expectation: yes (sender expects reply) | no (fire-and-forget)",
+                "default": "yes",
             },
             "ref": {
                 "type": "string",

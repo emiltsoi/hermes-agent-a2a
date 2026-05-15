@@ -1380,6 +1380,7 @@ def test_get_raw_agent_identity_includes_transports(tmp_path, monkeypatch):
     import yaml
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("A2A_VAULT_PATH", raising=False)
 
     # Create agent with webhook transport
     agent_key = "test-agent"
@@ -1409,5 +1410,24 @@ def test_get_raw_agent_identity_includes_transports(tmp_path, monkeypatch):
     resolved = resolve_agent(agent_key)
     assert resolved is not None
     assert "transports" not in resolved or "hermes_webhook" not in resolved.get("transports", {})
+
+
+def test_2d_cta_parameters_in_session_message_schema():
+    """Test that a2a_send_session_message schema includes 2D CTA parameters."""
+    schema = schemas.A2A_TELEGRAM
+    properties = schema["parameters"]["properties"]
+    
+    # Verify action parameter exists with correct enum
+    assert "action" in properties
+    assert properties["action"]["enum"] == ["do", "info"]
+    assert properties["action"]["default"] == "do"
+    
+    # Verify reply parameter exists with correct enum
+    assert "reply" in properties
+    assert properties["reply"]["enum"] == ["yes", "no"]
+    assert properties["reply"]["default"] == "yes"
+    
+    # Verify old cta parameter is removed
+    assert "cta" not in properties
 
 
