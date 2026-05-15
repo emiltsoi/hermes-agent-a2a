@@ -684,10 +684,6 @@ def _handle_call_mode2(
         return {"error": f"Mode 2 worker timed out after {timeout}s"}
     finally:
         unregister_worker(task_id)
-        from .worker_registry import cleanup_zombie_processes
-        cleanup_zombie_processes()
-        # communicate() already reaps the process on success
-        # Timeout path already waits after kill
 
     if proc is None or proc.returncode != 0:
         err = stderr.strip() if proc else "process not started"
