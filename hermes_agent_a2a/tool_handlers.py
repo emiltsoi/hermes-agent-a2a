@@ -1261,8 +1261,6 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         own_telegram_chat_id = own_vault.get("platforms", {}).get("telegram", {}).get("default_chat_id", "")
         echo_ok = False
         if own_bot_token and own_telegram_chat_id:
-            import logging
-            _logger = logging.getLogger(__name__)
             try:
                 import urllib.request
                 url = f"https://api.telegram.org/bot{own_bot_token}/sendMessage"
