@@ -119,6 +119,8 @@ class A2ARuntimeState:
     
     def __new__(cls) -> A2ARuntimeState:
         """Create or return the singleton instance."""
+        # Python's GIL makes double-checked locking safe here.
+        # Do not add checks between lines 123 and 125 without holding cls._lock.
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
