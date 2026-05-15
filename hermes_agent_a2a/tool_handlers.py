@@ -92,12 +92,14 @@ def _derive_hermes_home() -> str:
     # Validate the derived path contains expected structure
     hermes_agent_path = os.path.join(hermes_home, "hermes-agent")
     if not Path(hermes_agent_path).is_dir():
-        # Fall back to standard ~/.hermes if validation fails
-        fallback = str(Path.home() / ".hermes")
-        if Path(os.path.join(fallback, "hermes-agent")).is_dir():
-            return fallback
+        # Only fall back if HERMES_HOME was not explicitly set
+        hermes_home_was_default = "HERMES_HOME" not in os.environ
+        if hermes_home_was_default:
+            fallback = str(Path.home() / ".hermes")
+            if Path(os.path.join(fallback, "hermes-agent")).is_dir():
+                return fallback
         raise ValueError(
-            f"Cannot find Hermes installation at {hermes_home} or {fallback}. "
+            f"Cannot find Hermes installation at {hermes_home}. "
             f"Set HERMES_HOME to the correct root directory."
         )
     

@@ -6,6 +6,7 @@ import threading
 import urllib.request
 from unittest.mock import patch, MagicMock
 
+import pytest
 import yaml
 
 from hermes_agent_a2a import schemas
@@ -377,36 +378,35 @@ def test_derive_hermes_home_from_profile_path(tmp_path, monkeypatch):
 
 
 def test_derive_hermes_home_fallback_to_default(tmp_path, monkeypatch):
-    """Test _derive_hermes_home falls back to ~/.hermes when validation fails."""
-    # Create a fake HERMES_HOME that doesn't have hermes-agent
+    """Test _derive_hermes_home falls back to ~/.hermes when HERMES_HOME is NOT explicitly set."""
+    # Create a fake working directory that doesn't have hermes-agent
     fake_home = tmp_path / "fake_hermes"
     fake_home.mkdir()
-    
+
     # Create actual ~/.hermes with hermes-agent
     real_home = tmp_path / "home" / ".hermes"
     real_home.mkdir(parents=True)
     (real_home / "hermes-agent").mkdir()
-    
-    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+
+    # Do NOT set HERMES_HOME explicitly - it should fall back to default
+    monkeypatch.delenv("HERMES_HOME", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    
+
     result = tools._derive_hermes_home()
     assert result == str(real_home)
 
 
-def test_derive_hermes_home_raises_error_on_invalid_path(tmp_path, monkeypatch):
-    """Test _derive_hermes_home raises ValueError when no valid path exists."""
+def test_derive_hermes_home_raises_error_on_explicit_invalid_path(tmp_path, monkeypatch):
+    """Test _derive_hermes_home raises ValueError when HERMES_HOME is explicitly set to invalid path."""
     fake_home = tmp_path / "fake_hermes"
     fake_home.mkdir()
-    
+
+    # Explicitly set HERMES_HOME to an invalid path
     monkeypatch.setenv("HERMES_HOME", str(fake_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "nonexistent")
-    
-    try:
+
+    with pytest.raises(ValueError, match="Cannot find Hermes installation"):
         tools._derive_hermes_home()
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "Cannot find Hermes installation" in str(e)
 
 
 def test_validate_agent_webhook_config_valid():

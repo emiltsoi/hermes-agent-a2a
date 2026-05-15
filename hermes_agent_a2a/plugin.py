@@ -45,8 +45,22 @@ def _start_a2a_server() -> None:
 
     port = int(os.getenv("A2A_PORT", "8081"))
     host = os.getenv("A2A_HOST", "127.0.0.1")
+    max_port_retries = int(os.getenv("A2A_PORT_RETRY_MAX", "10"))
 
-    server = A2AServer(host, port)
+    server = None
+    last_error = None
+    for attempt in range(max_port_retries):
+        try:
+            server = A2AServer(host, port)
+            break
+        except OSError as e:
+            last_error = e
+            if "Address already in use" in str(e) and attempt < max_port_retries - 1:
+                port += 1
+                logger.warning("[HermesA2A] Port %d in use, retrying with %d", port - 1, port)
+            else:
+                raise
+
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     _server_process = thread

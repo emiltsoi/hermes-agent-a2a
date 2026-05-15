@@ -243,10 +243,14 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
     if base_delay is None:
         base_delay = float(os.getenv("A2A_WEBHOOK_BACKOFF", "1.0"))
 
-    secret = os.getenv("A2A_WEBHOOK_SECRET", "") or os.getenv("WEBHOOK_SECRET", "")
+    secret = os.getenv("A2A_WEBHOOK_SECRET", "")
     if not secret:
-        if on_failure:
-            on_failure(task_id)
+        if os.getenv("WEBHOOK_SECRET"):
+            logger.warning("[A2A] A2A_WEBHOOK_SECRET not set, falling back to WEBHOOK_SECRET. This is not recommended for security.")
+            secret = os.getenv("WEBHOOK_SECRET", "")
+        if not secret:
+            if on_failure:
+                on_failure(task_id)
         return
 
     port = int(os.getenv("WEBHOOK_PORT", "8644"))
