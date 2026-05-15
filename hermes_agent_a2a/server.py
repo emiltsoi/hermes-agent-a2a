@@ -71,10 +71,17 @@ class TaskQueue:
             if task_id in self._pending:
                 return None
             self._pending[task_id] = task
+            # Only evict tasks that are not currently being processed to avoid race
             while len(self._pending) > _TASK_CACHE_MAX:
-                _, old = self._pending.popitem(last=False)
-                old.response = "(dropped — queue overflow)"
-                old.ready.set()
+                for tid, old_task in list(self._pending.items()):
+                    if tid not in self._processing:
+                        self._pending.pop(tid)
+                        old_task.response = "(dropped — queue overflow)"
+                        old_task.ready.set()
+                        break
+                else:
+                    # All pending tasks are being processed, stop evicting
+                    break
         # Record task received metric
         try:
             from .runtime_state import get_runtime_state as get_state

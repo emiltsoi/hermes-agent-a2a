@@ -1201,3 +1201,34 @@ def test_cr7_clear_stops_metrics_logger(monkeypatch):
         # The event must have been set (signalling the logger thread to stop)
         assert event.is_set(), "A2ARuntimeState.clear() must set _metrics_logger_event to stop the logger thread"
 
+
+def test_medium_1_update_exchange_placeholder_matching(tmp_path, monkeypatch):
+    """MEDIUM-1: save_exchange must write placeholder that update_exchange can find and replace."""
+    from datetime import datetime, timezone
+    from hermes_agent_a2a.persistence import save_exchange, update_exchange
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    agent_name = "test-agent"
+    task_id = "task-123"
+    outbound_text = "hello from me"
+    inbound_text = "response from agent"
+
+    # Save an outbound exchange (should write placeholder)
+    result_path = save_exchange(
+        agent_name=agent_name,
+        task_id=task_id,
+        inbound_text=inbound_text,
+        outbound_text=outbound_text,
+        direction="outbound",
+    )
+
+    # Update the exchange (should replace placeholder with actual text)
+    updated = update_exchange(agent_name=agent_name, task_id=task_id, inbound_text=inbound_text)
+    assert updated is True, "update_exchange must successfully find and replace the placeholder"
+
+    # Read back and verify the placeholder was replaced
+    content = result_path.read_text(encoding="utf-8")
+    assert "(waiting for reply…)" not in content, "Placeholder should be replaced"
+    assert inbound_text in content, "Actual inbound text should be present"
+

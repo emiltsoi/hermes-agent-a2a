@@ -195,10 +195,13 @@ class A2ARuntimeState:
             self._metrics = A2AMetrics()
     
     def to_dict(self) -> dict:
-        """Export state as dict (for backward compatibility)."""
+        """Export state as dict (for backward compatibility).
+        
+        Returns a snapshot to prevent mutation of live objects without locks.
+        """
         with self._state_lock:
             return {
-                "task_queue": self._task_queue,
+                "task_queue": None,  # Live TaskQueue not exposed to prevent lock bypass
                 "server": self._server,
                 "thread": self._thread,
                 "owner_module": self._owner_module,
@@ -224,11 +227,12 @@ def clear_runtime_state() -> None:
 
 
 _metrics_logger_event: Optional[threading.Event] = None
+_metrics_logger_thread: Optional[threading.Thread] = None
 
 
 def _start_metrics_logger() -> None:
     """Start background thread to log metrics periodically."""
-    global _metrics_logger_event
+    global _metrics_logger_event, _metrics_logger_thread
 
     if os.getenv("A2A_METRICS_LOG_ENABLED", "false").lower() != "true":
         return
@@ -250,12 +254,17 @@ def _start_metrics_logger() -> None:
 
     thread = threading.Thread(target=log_metrics, daemon=True)
     thread.start()
+    _metrics_logger_thread = thread
     _logger.info("[A2A Metrics] Periodic logging started (interval: %ds)", log_interval)
 
 
 def _stop_metrics_logger() -> None:
     """Stop the background metrics logger if running."""
-    global _metrics_logger_event
+    global _metrics_logger_event, _metrics_logger_thread
     if _metrics_logger_event is not None:
         _metrics_logger_event.set()
         _metrics_logger_event = None
+    if _metrics_logger_thread is not None:
+        # Wait for thread to exit with a timeout to avoid blocking shutdown
+        _metrics_logger_thread.join(timeout=2.0)
+        _metrics_logger_thread = None

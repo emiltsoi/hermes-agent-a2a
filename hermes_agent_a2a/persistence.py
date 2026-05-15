@@ -44,7 +44,7 @@ def save_exchange(
     if direction == "outbound":
         entry_lines.append(f"**\u2192 me:** {outbound_text}")
         entry_lines.append("")
-        entry_lines.append(f"**\u2190 {safe_name}:** {inbound_text}")
+        entry_lines.append(f"**\u2190 {safe_name}:** (waiting for reply\u2026)")
     else:
         entry_lines.append(f"**\u2190 {safe_name}:** {inbound_text}")
         entry_lines.append("")
@@ -63,7 +63,7 @@ def save_exchange(
             rotated = filepath.with_name(filepath.stem + f"_old_{now.strftime('%H%M%S')}" + filepath.suffix)
             filepath.rename(rotated)
         existing = filepath.read_text(encoding="utf-8") if filepath.exists() else ""
-        tmp_path = filepath.with_name(filepath.name + ".tmp")
+        tmp_path = filepath.with_name(filepath.name + f".tmp.{os.getpid()}")  # Unique temp file per process
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(existing + new_content)
             f.flush()
