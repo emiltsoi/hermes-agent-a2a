@@ -1374,3 +1374,40 @@ def test_trigger_webhook_fallback_to_webhook_when_direct_not_enabled():
             assert any("hub-signature" in k.lower() for k in req.headers.keys())
 
 
+def test_get_raw_agent_identity_includes_transports(tmp_path, monkeypatch):
+    """Webhook validation fix: get_raw_agent_identity() must return transports without CR-1 stripping."""
+    from hermes_agent_a2a.identity import get_raw_agent_identity, resolve_agent
+    import yaml
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # Create agent with webhook transport
+    agent_key = "test-agent"
+    fleet_dir = tmp_path / "fleet" / "a2a" / "agents" / agent_key
+    fleet_dir.mkdir(parents=True)
+    identity_file = fleet_dir / "identity.yaml"
+    identity_data = {
+        "id": agent_key,
+        "name": "Test Agent",
+        "transports": {
+            "hermes_webhook": {
+                "url": "http://127.0.0.1:8644/webhooks/a2a_trigger",
+                "secret": "test-secret"
+            }
+        }
+    }
+    identity_file.write_text(yaml.dump(identity_data), encoding="utf-8")
+
+    # get_raw_agent_identity should include transports
+    raw = get_raw_agent_identity(agent_key)
+    assert raw is not None
+    assert "transports" in raw
+    assert raw["transports"]["hermes_webhook"]["url"] == "http://127.0.0.1:8644/webhooks/a2a_trigger"
+    assert raw["transports"]["hermes_webhook"]["secret"] == "test-secret"
+
+    # resolve_agent (CR-1) should strip transports/credentials
+    resolved = resolve_agent(agent_key)
+    assert resolved is not None
+    assert "transports" not in resolved or "hermes_webhook" not in resolved.get("transports", {})
+
+
