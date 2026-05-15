@@ -93,8 +93,7 @@ class A2AMetrics:
     
     def _get_queue_depth(self) -> int:
         try:
-            from .runtime_state import get_runtime_state as get_state
-            queue = get_state().get_task_queue()
+            queue = get_runtime_state().get_task_queue()
             if queue is None:
                 _logger.warning("[A2A Metrics] Task queue is None during queue depth lookup — state may have been cleared")
                 return 0
