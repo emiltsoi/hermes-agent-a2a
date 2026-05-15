@@ -77,7 +77,6 @@ class TaskQueue:
             if task_id in self._pending:
                 return None
             self._pending[task_id] = task
-            self._enqueue_count += 1
             # Only evict tasks that are not currently being processed to avoid race
             while len(self._pending) > _TASK_CACHE_MAX:
                 for tid, old_task in list(self._pending.items()):
@@ -89,6 +88,8 @@ class TaskQueue:
                 else:
                     # All pending tasks are being processed, stop evicting
                     break
+            # Increment counter after successful enqueue (after eviction check)
+            self._enqueue_count += 1
         # Record task received metric
         try:
             from .runtime_state import get_runtime_state as get_state
