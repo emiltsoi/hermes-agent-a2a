@@ -105,7 +105,7 @@ class AuditLogger:
                 with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
-            logger.debug("Failed to write A2A audit log", exc_info=True)
+            logger.warning("Failed to write A2A audit log", exc_info=True)
 
 
 audit = AuditLogger()
