@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hermes-agent-a2a"
-version = "3.1.0"
+version = "3.1.3"
 description = "A2A protocol plugin for Hermes Agent — self-contained, fleet-agnostic"
 readme = "README.md"
 requires-python = ">=3.11"
