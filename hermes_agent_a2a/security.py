@@ -43,7 +43,8 @@ SENSITIVE_PATTERNS = [
     re.compile(r"(?i)(sk-[a-zA-Z0-9]{20,})"),
     re.compile(r"(?i)(ghp_[a-zA-Z0-9]{20,})"),
     re.compile(r"(?i)(xoxb-[a-zA-Z0-9-]+)"),
-    re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    # Email pattern is disabled - too broad, redacts legitimate contact info
+    # re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
 ]
 
 
