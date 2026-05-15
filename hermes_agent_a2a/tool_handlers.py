@@ -550,6 +550,9 @@ def handle_discover(
         card_path = agent_card_path or "/.well-known/agent.json"
         if not card_path.startswith("/"):
             card_path = "/" + card_path
+        # Prevent path traversal attacks
+        if ".." in card_path:
+            return {"error": "card_path contains '..' which is not allowed for security reasons"}
         card = _http_request("GET", f"{target_url.rstrip('/')}{card_path}", headers=headers)
     except ConnectionError:
         return {"error": f"Cannot connect to {target_url}"}
