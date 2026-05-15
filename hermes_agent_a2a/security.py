@@ -100,7 +100,7 @@ class AuditLogger:
         }
         try:
             with self._lock:
-                self.log_path.parent.mkdir(parents=True, exist_ok=True)
+                # Hold lock across rotation check to prevent TOCTOU
                 self._rotate_if_needed()
                 with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
