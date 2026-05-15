@@ -217,16 +217,9 @@ def _get_task_queue() -> TaskQueue:
     return get_state().get_task_queue()
 
 
-# Lazy initialization to avoid circular import
-task_queue: TaskQueue = None  # type: ignore
-
-
 def _ensure_task_queue() -> TaskQueue:
-    """Ensure task queue is initialized (called lazily)."""
-    global task_queue
-    if task_queue is None:
-        task_queue = _get_task_queue()
-    return task_queue
+    """Get the task queue from the singleton state."""
+    return _get_task_queue()
 
 
 def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None, on_failure=None):
