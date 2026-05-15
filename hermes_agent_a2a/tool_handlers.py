@@ -172,7 +172,7 @@ _call_timestamps: deque[float] = deque()
 _rate_lock = threading.Lock()
 
 
-def handle_help(topic: str = "overview", user_task: Optional[str] = None) -> dict:
+def handle_help(topic: str = "overview") -> dict:
     topic = (topic or "overview").strip().lower()
     tools = {
         "a2a_help": "Show this guide.",
@@ -600,7 +600,7 @@ def handle_discover(
 # ----------------------------------------------------------------------
 
 
-def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
+def handle_list(task_id: Optional[str] = None) -> dict:
     """Return all agents registered in the vault registry.
 
     Uses VaultResolver.list_agents() to enumerate $HERMES_HOME/profiles/*/a2a/vault.yaml.
