@@ -37,10 +37,19 @@ _ensure_server: Optional[callable] = None
 _get_vault_resolver: Optional[callable] = None
 
 
-def set_runtime_callbacks(ensure_server=None, get_vault_resolver=None) -> None:
+def set_runtime_callbacks(ensure_server=None, get_vault_resolver=None, force=False) -> None:
+    """Set runtime callbacks injected by plugin.py during register().
+    
+    Args:
+        force: If True, overwrite existing callbacks. If False (default),
+               only set callbacks that are currently None to prevent
+               overwriting on plugin reload.
+    """
     global _ensure_server, _get_vault_resolver
-    _ensure_server = ensure_server
-    _get_vault_resolver = get_vault_resolver
+    if force or _ensure_server is None:
+        _ensure_server = ensure_server
+    if force or _get_vault_resolver is None:
+        _get_vault_resolver = get_vault_resolver
 
 
 def _vault():
