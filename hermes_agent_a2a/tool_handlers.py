@@ -609,7 +609,7 @@ def handle_discover(
 # ----------------------------------------------------------------------
 
 
-def handle_list(task_id: Optional[str] = None) -> dict:
+def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
     """Return all agents registered in the vault registry.
 
     Uses VaultResolver.list_agents() to enumerate $HERMES_HOME/profiles/*/a2a/vault.yaml.
@@ -1305,7 +1305,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     }
 
 
-def handle_get_metrics() -> dict:
+def handle_get_metrics(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
     """Get current A2A plugin metrics."""
     from .runtime_state import get_runtime_state as get_state
     return get_state().get_metrics().get_metrics()
