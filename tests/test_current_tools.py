@@ -1226,3 +1226,147 @@ def test_medium_1_update_exchange_placeholder_matching(tmp_path, monkeypatch):
     assert "(waiting for reply…)" not in content, "Placeholder should be replaced"
     assert inbound_text in content, "Actual inbound text should be present"
 
+
+def test_load_a2a_agents_reads_from_config_yaml(tmp_path, monkeypatch):
+    """Plugin self-containment: _load_a2a_agents() must read a2a.agents from config.yaml."""
+    from hermes_agent_a2a.identity import _load_a2a_agents
+    import yaml
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # Create config.yaml with a2a.agents
+    config_path = tmp_path / "config.yaml"
+    config_data = {
+        "a2a": {
+            "agents": [
+                {"name": "agent1", "url": "http://127.0.0.1:41808", "auth_token": "token1"},
+                {"name": "agent2", "url": "http://127.0.0.1:41809", "auth_token": "token2"},
+            ]
+        }
+    }
+    config_path.write_text(yaml.dump(config_data), encoding="utf-8")
+
+    agents = _load_a2a_agents()
+
+    assert "agent1" in agents
+    assert "agent2" in agents
+    assert agents["agent1"]["url"] == "http://127.0.0.1:41808"
+    assert agents["agent1"]["auth_token"] == "token1"
+    assert agents["agent2"]["url"] == "http://127.0.0.1:41809"
+
+
+def test_load_a2a_agents_handles_missing_config_gracefully(tmp_path, monkeypatch):
+    """Plugin self-containment: _load_a2a_agents() must return empty dict when config is missing."""
+    from hermes_agent_a2a.identity import _load_a2a_agents
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # No config.yaml exists
+    agents = _load_a2a_agents()
+
+    assert agents == {}
+
+
+def test_call_a2a_direct_builds_correct_json_rpc_payload():
+    """Plugin self-containment: _call_a2a_direct() must build valid JSON-RPC 2.0 payload."""
+    from hermes_agent_a2a.server import _call_a2a_direct
+    from unittest.mock import patch, MagicMock
+    import json
+
+    # Mock urllib.request.urlopen to capture the request
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps({"result": {"id": "task-123"}}).encode()
+    mock_response.__enter__ = lambda self: self
+    mock_response.__exit__ = lambda self, *args: None
+
+    with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
+        result = _call_a2a_direct(
+            url="http://127.0.0.1:41808/a2a",
+            message="hello",
+            task_id="task-123",
+            auth_token="secret"
+        )
+
+        # Verify the call was made
+        assert mock_urlopen.called
+        req = mock_urlopen.call_args[0][0]
+
+        # Verify JSON-RPC 2.0 payload structure
+        body = json.loads(req.data.decode())
+        assert body["jsonrpc"] == "2.0"
+        assert body["method"] == "tasks/send"
+        assert body["params"]["task"]["id"] == "task-123"
+        assert body["params"]["task"]["text"] == "hello"
+
+        # Verify auth token in headers
+        assert req.headers["Authorization"] == "Bearer secret"
+
+
+def test_call_a2a_direct_handles_http_errors():
+    """Plugin self-containment: _call_a2a_direct() must return error dict on HTTP failure."""
+    from hermes_agent_a2a.server import _call_a2a_direct
+    from unittest.mock import patch
+    from urllib.error import HTTPError
+
+    with patch("urllib.request.urlopen", side_effect=HTTPError(None, 404, "Not Found", None, None)):
+        result = _call_a2a_direct(
+            url="http://127.0.0.1:41808/a2a",
+            message="hello",
+            task_id="task-123"
+        )
+
+        assert "error" in result
+        assert "404" in result["error"]
+
+
+def test_trigger_webhook_uses_direct_a2a_when_flag_set():
+    """Plugin self-containment: _trigger_webhook() must use direct A2A when use_direct_a2a=True."""
+    from hermes_agent_a2a.server import _trigger_webhook, _call_a2a_direct
+    from unittest.mock import patch
+
+    # Mock _call_a2a_direct to verify it's called
+    with patch("hermes_agent_a2a.server._call_a2a_direct", return_value={"result": "ok"}) as mock_direct:
+        _trigger_webhook(
+            message="test message",
+            task_id="task-123",
+            use_direct_a2a=True,
+            target_url="http://127.0.0.1:41808/a2a",
+            auth_token="secret"
+        )
+
+        # Verify direct A2A was called
+        assert mock_direct.called
+        call_args = mock_direct.call_args[0]
+        assert call_args[0] == "http://127.0.0.1:41808/a2a"
+        assert call_args[1] == "test message"
+        assert call_args[2] == "task-123"
+        assert call_args[3] == "secret"
+
+
+def test_trigger_webhook_fallback_to_webhook_when_direct_not_enabled():
+    """Plugin self-containment: _trigger_webhook() must use webhook when use_direct_a2a=False."""
+    from hermes_agent_a2a.server import _trigger_webhook
+    from unittest.mock import patch
+
+    # Mock webhook secret to allow webhook path
+    with patch.dict("os.environ", {"A2A_WEBHOOK_SECRET": "test-secret"}):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.__enter__ = lambda self: self
+            mock_response.__exit__ = lambda self, *args: None
+            mock_urlopen.return_value = mock_response
+
+            _trigger_webhook(
+                message="test message",
+                task_id="task-123",
+                use_direct_a2a=False  # Use webhook path
+            )
+
+            # Verify webhook was called (not direct A2A)
+            assert mock_urlopen.called
+            req = mock_urlopen.call_args[0][0]
+            # Headers are case-insensitive, check for signature presence
+            assert any("hub-signature" in k.lower() for k in req.headers.keys())
+
+

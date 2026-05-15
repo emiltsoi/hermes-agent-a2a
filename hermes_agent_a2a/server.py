@@ -233,14 +233,26 @@ def _ensure_task_queue() -> TaskQueue:
     return _get_task_queue()
 
 
-def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None, on_failure=None):
-    """POST to the internal webhook to trigger an agent turn, with retry.
+def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None, on_failure=None, use_direct_a2a: bool = False, target_url: str = "", auth_token: str = ""):
+    """Trigger an agent turn via webhook or direct A2A call.
 
     Args:
         deliver_only: if True, the webhook handler invokes the agent but skips
             Telegram routing (used for peer-originated A2A tasks).
+        use_direct_a2a: if True, use direct A2A JSON-RPC call instead of webhook.
+        target_url: A2A endpoint URL (required when use_direct_a2a=True).
+        auth_token: Bearer token for A2A authentication (optional).
         on_failure: optional callable invoked with (task_id,) if all retries fail.
     """
+    # Use direct A2A for modes 1,2,3 (protocol tasks, workers)
+    if use_direct_a2a and target_url:
+        result = _call_a2a_direct(target_url, message, task_id, auth_token)
+        if "error" in result:
+            logger.warning("[A2A] Direct A2A call failed: %s", result["error"])
+            if on_failure:
+                on_failure(task_id)
+        return
+
     # Make retry logic configurable via environment variables
     if retries is None:
         retries = int(os.getenv("A2A_WEBHOOK_RETRIES", "3"))
@@ -299,6 +311,53 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
     logger.warning("[A2A] Webhook trigger failed after %d attempts: %s", retries, last_exc)
     if on_failure:
         on_failure(task_id)
+
+
+def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10) -> dict:
+    """Make a direct A2A JSON-RPC call to an agent.
+
+    Args:
+        url: Target agent's A2A endpoint (e.g., http://127.0.0.1:41808/a2a)
+        message: The message to send
+        task_id: Unique task identifier
+        auth_token: Optional bearer token for authentication
+        timeout: HTTP timeout in seconds
+
+    Returns:
+        Response dict with 'result' or 'error' key
+    """
+    import uuid as _uuid
+    payload = {
+        "jsonrpc": "2.0",
+        "id": str(_uuid.uuid4()),
+        "method": "tasks/send",
+        "params": {
+            "task": {
+                "id": task_id,
+                "text": message,
+            }
+        }
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    headers = {"Content-Type": "application/json"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            response_data = json.loads(resp.read().decode())
+            if "result" in response_data:
+                return {"result": response_data["result"], "task_id": task_id}
+            elif "error" in response_data:
+                return {"error": response_data["error"], "task_id": task_id}
+            return {"error": "Invalid response", "task_id": task_id}
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}: {e.reason}", "task_id": task_id}
+    except urllib.error.URLError as e:
+        return {"error": f"URL error: {e.reason}", "task_id": task_id}
+    except Exception as e:
+        return {"error": str(e), "task_id": task_id}
 
 
 def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:

@@ -49,6 +49,25 @@ def _fleet_root() -> Path:
     return Path(os.environ.get("A2A_VAULT_PATH", str(_hermes_root() / "fleet")))
 
 
+def _load_a2a_agents() -> dict:
+    """Load A2A agent registry from ~/.hermes/config.yaml.
+
+    Returns a dict keyed by agent name (lowercase), e.g.:
+      {"isa": {"url": "http://127.0.0.1:41808", "auth_token": "..."}}
+    """
+    try:
+        import yaml
+        cfg_path = _hermes_home() / "config.yaml"
+        if cfg_path.exists():
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            agents = cfg.get("a2a", {}).get("agents", []) or []
+            return {a.get("name", "").lower(): a for a in agents if a.get("name")}
+    except Exception:
+        pass
+    return {}
+
+
 def _normalize_identity(raw: dict) -> dict:
     if not isinstance(raw, dict):
         return {}
