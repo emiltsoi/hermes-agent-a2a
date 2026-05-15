@@ -1198,6 +1198,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     task_id = task_id or str(uuid.uuid4())
     msg_id = task_id
     hermes = build_hermes_metadata(route="session", execution="gateway_session", delivery="one_way", reply_mode="none")
+    # Session messages are one-way by design. The envelope uses notification/acknowledge at protocol level.
+    # The 2D CTA (action/reply) is semantic guidance for the recipient LLM, embedded in the text header.
     envelope = build_task_send_payload(
         task_id=task_id,
         message=message,
@@ -1301,7 +1303,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         "state": "completed",
         "status": "delivered",
         "delivery": "delivered",
-        "reply_expected": False,
+        "reply_expected": reply == "yes",
         "message_id": delivery_id,
         "agent": agent,
         "gateway_delivery": True,

@@ -326,18 +326,15 @@ def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "",
     Returns:
         Response dict with 'result' or 'error' key
     """
-    import uuid as _uuid
-    payload = {
-        "jsonrpc": "2.0",
-        "id": str(_uuid.uuid4()),
-        "method": "tasks/send",
-        "params": {
-            "task": {
-                "id": task_id,
-                "text": message,
-            }
-        }
-    }
+    from .a2a_spec.tasks import build_task_send_payload
+    from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
+    payload = build_task_send_payload(
+        task_id=task_id,
+        message=message,
+        sender_name=from_agent,
+        intent="consultation",
+        expected_action="reply",
+    )
     body = json.dumps(payload, ensure_ascii=False).encode()
     headers = {"Content-Type": "application/json"}
     if auth_token:

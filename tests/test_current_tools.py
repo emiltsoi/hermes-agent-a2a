@@ -170,7 +170,6 @@ def test_protocol_skill_metadata_and_validation():
     assert result["response"] == "ok"
     payload = http.call_args.kwargs["json_body"]
     assert payload["params"]["message"]["metadata"]["skill"] == "summarize"
-    assert payload["params"]["metadata"]["skill"] == "summarize"
 
     with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
         result = tools.handle_send_protocol_task(name="external", message="hello", skill="translate")
@@ -317,7 +316,7 @@ def test_session_message_returns_a2a_shaped_delivery_ack(monkeypatch):
     ), patch.object(
         urllib.request, "urlopen", return_value=FakeResponse()
     ):
-        result = tools.handle_send_session_message(message="hello", agent="agent1", task_id="task-123456789")
+        result = tools.handle_send_session_message(message="hello", agent="agent1", task_id="task-123456789", reply="no")
 
     assert result["task_id"] == "task-123456789"
     assert result["state"] == "completed"
@@ -1295,12 +1294,14 @@ def test_call_a2a_direct_builds_correct_json_rpc_payload():
         assert mock_urlopen.called
         req = mock_urlopen.call_args[0][0]
 
-        # Verify JSON-RPC 2.0 payload structure
+        # Verify JSON-RPC 2.0 payload structure (spec format)
         body = json.loads(req.data.decode())
         assert body["jsonrpc"] == "2.0"
         assert body["method"] == "tasks/send"
-        assert body["params"]["task"]["id"] == "task-123"
-        assert body["params"]["task"]["text"] == "hello"
+        assert body["params"]["id"] == "task-123"
+        assert body["params"]["message"]["role"] == "user"
+        assert body["params"]["message"]["parts"][0]["type"] == "text"
+        assert body["params"]["message"]["parts"][0]["text"] == "hello"
 
         # Verify auth token in headers
         assert req.headers["Authorization"] == "Bearer secret"
@@ -1429,5 +1430,51 @@ def test_2d_cta_parameters_in_session_message_schema():
     
     # Verify old cta parameter is removed
     assert "cta" not in properties
+
+
+def test_2d_cta_behavioral():
+    """Test behavioral aspects of 2D CTA parameters."""
+    from hermes_agent_a2a.a2a_spec.tasks import build_task_send_payload
+    
+    # Test that reply_expected in return value reflects reply parameter
+    # This is tested indirectly through the handler, but we can verify the envelope behavior
+    envelope = build_task_send_payload(
+        task_id="test-task",
+        message="test message",
+        sender_name="test-sender",
+        intent="notification",
+        expected_action="acknowledge",
+    )
+    
+    # Verify envelope structure is correct (spec format)
+    assert envelope["method"] == "tasks/send"
+    assert envelope["params"]["id"] == "test-task"
+    assert envelope["params"]["message"]["role"] == "user"
+    assert envelope["params"]["message"]["parts"][0]["type"] == "text"
+    assert envelope["params"]["message"]["parts"][0]["text"] == "test message"
+    
+    # Verify metadata includes intent and expected_action
+    metadata = envelope["params"]["message"]["metadata"]
+    assert metadata["intent"] == "notification"
+    assert metadata["expected_action"] == "acknowledge"
+    assert metadata["sender_name"] == "test-sender"
+    
+    # Test that skill is merged into metadata, not replacing it
+    envelope_with_skill = build_task_send_payload(
+        task_id="test-task",
+        message="test message",
+        sender_name="test-sender",
+        intent="consultation",
+        expected_action="reply",
+        skill="test-skill",
+    )
+    
+    metadata_with_skill = envelope_with_skill["params"]["message"]["metadata"]
+    # Verify all original metadata is preserved
+    assert metadata_with_skill["intent"] == "consultation"
+    assert metadata_with_skill["expected_action"] == "reply"
+    assert metadata_with_skill["sender_name"] == "test-sender"
+    # Verify skill is added, not replacing
+    assert metadata_with_skill["skill"] == "test-skill"
 
 

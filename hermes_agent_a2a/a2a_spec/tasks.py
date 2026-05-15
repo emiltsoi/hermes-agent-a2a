@@ -45,8 +45,6 @@ def build_task_send_payload(
             },
         },
     }
-    if skill:
-        payload["params"]["metadata"] = {"skill": skill}
     return payload
 
 
