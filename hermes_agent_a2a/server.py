@@ -36,6 +36,7 @@ try:
     from hermes_cli import __version__ as HERMES_VERSION
 except Exception:
     HERMES_VERSION = "0.0.0"
+    logger.warning("[A2A] Failed to import hermes_cli.__version, using fallback '0.0.0'. hermes_cli may be misinstalled.")
 
 
 class _PendingTask:
