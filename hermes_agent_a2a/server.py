@@ -326,18 +326,16 @@ def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "",
     Returns:
         Response dict with 'result' or 'error' key
     """
+    from .a2a_spec.tasks import build_task_send_payload, parse_json_rpc_error, parse_task_result
     import uuid as _uuid
-    payload = {
-        "jsonrpc": "2.0",
-        "id": str(_uuid.uuid4()),
-        "method": "tasks/send",
-        "params": {
-            "task": {
-                "id": task_id,
-                "text": message,
-            }
-        }
-    }
+
+    payload = build_task_send_payload(
+        task_id=task_id,
+        message=message,
+        sender_name=os.getenv("A2A_AGENT_NAME", "hermes-agent"),
+        intent="consultation",
+        expected_action="reply",
+    )
     body = json.dumps(payload, ensure_ascii=False).encode()
     headers = {"Content-Type": "application/json"}
     if auth_token:
@@ -348,9 +346,10 @@ def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "",
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             response_data = json.loads(resp.read().decode())
             if "result" in response_data:
-                return {"result": response_data["result"], "task_id": task_id}
+                parsed = parse_task_result(response_data["result"], default_task_id=task_id)
+                return {"result": parsed["response"], "task_id": task_id, "state": parsed["state"]}
             elif "error" in response_data:
-                return {"error": response_data["error"], "task_id": task_id}
+                return {"error": parse_json_rpc_error(response_data), "task_id": task_id}
             return {"error": "Invalid response", "task_id": task_id}
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.reason}", "task_id": task_id}
