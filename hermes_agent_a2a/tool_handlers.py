@@ -1197,13 +1197,13 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     # Part 1: Webhook to target agent's gateway relay.
     hermes_webhook = _transport(target_info, "hermes_webhook")
     target_webhook_url = hermes_webhook.get("url", "") or (target_info.get("webhook_url", "") if isinstance(target_info, dict) else "")
-    import hashlib, hmac, json as _json
+    import hashlib, hmac
     delivery_id = None
     if target_webhook_url:
         webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (target_info.get("webhook_secret", "") if isinstance(target_info, dict) else "")
         if not webhook_secret:
             return {"error": f"Agent '{agent}' has no webhook_secret configured - HMAC signature required for secure delivery"}
-        body = _json.dumps({"text": padded_message}, sort_keys=True)
+        body = json.dumps({"text": padded_message}, sort_keys=True)
         sig = hmac.new(
             webhook_secret.encode(),
             body.encode(),
@@ -1235,7 +1235,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                     method="POST"
                 )
                 with urllib.request.urlopen(req, timeout=delivery_timeout) as resp:
-                    result = _json.loads(resp.read().decode())
+                    result = json.loads(resp.read().decode())
                     delivery_id = result.get("delivery_id", "unknown")
                 metrics.record_webhook_attempt_and_success()
                 if attempt > 0:
@@ -1266,14 +1266,14 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
             try:
                 import urllib.request
                 url = f"https://api.telegram.org/bot{own_bot_token}/sendMessage"
-                payload = _json.dumps({
+                payload = json.dumps({
                     "chat_id": str(own_telegram_chat_id),
                     "text": padded_message,
                     "parse_mode": "HTML",
                 }).encode()
                 req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    echo_result = _json.loads(resp.read().decode())
+                    echo_result = json.loads(resp.read().decode())
                 if echo_result.get("ok"):
                     echo_ok = True
                 else:
