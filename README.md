@@ -242,11 +242,19 @@ Without this routing, `a2a_send_session_message` may reach the webhook but not l
 
 ### Hermes gateway compatibility
 
-`a2a_send_session_message` currently depends on Hermes gateway support for:
+> **⚠️ Mode 4 (session relay) requires gateway patches**
+
+The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches that are not present in the standard public `hermes-agent` codebase. Modes 1-3 (protocol tasks, local/remote workers) are self-contained and work without any gateway patches.
+
+**Mode 4 requires these gateway patches:**
 
 - `platforms.webhook.extra.routes.<route>.target_session` to bind the webhook event to an existing platform session.
-- webhook-sourced session authorization after HMAC validation.
-- webhook source/platform override when routing into another platform session.
+- webhook-sourced session authorization after HMAC validation (webhook allowlist bypass for `webhook:` user IDs).
+- webhook source/platform override when routing into another platform session (`_platform` parameter in `build_source()`).
+
+**Minimal gateway changes needed (+8 lines):**
+- `gateway/platforms/base.py`: +2 lines for `_platform` override in `build_source()`
+- `gateway/run.py`: +6 lines for webhook allowlist bypass
 
 The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and sender-side Telegram visibility echo. The gateway should only provide generic authenticated webhook-to-session routing.
 

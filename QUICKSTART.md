@@ -2,6 +2,10 @@
 
 This guide gets one Hermes profile running the `a2a` toolset and shows how to onboard an external A2A agent.
 
+> **⚠️ Important: Mode 4 (session relay) requires gateway patches**
+>
+> The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches for `target_session` routing and webhook allowlist bypass. Modes 1-3 (protocol tasks, local/remote workers) are self-contained and work without gateway patches. See the [README](README.md#hermes-gateway-compatibility) for details.
+
 ## 1. Install
 
 ```bash
