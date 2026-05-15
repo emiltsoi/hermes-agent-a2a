@@ -1169,14 +1169,15 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
     # Validate webhook configuration before attempting delivery
     from .identity import get_raw_agent_identity
-    is_valid, validation_error = _validate_agent_webhook_config(get_raw_agent_identity(agent))
+    raw_info = get_raw_agent_identity(agent)
+    is_valid, validation_error = _validate_agent_webhook_config(raw_info)
     if not is_valid:
         return {"error": f"Agent '{agent}' webhook configuration invalid: {validation_error}"}
 
     # Optional webhook reachability check
     if os.getenv("A2A_WEBHOOK_REACHABILITY_CHECK", "false").lower() == "true":
-        hermes_webhook = _transport(target_info, "hermes_webhook")
-        target_webhook_url = hermes_webhook.get("url", "") or (target_info.get("webhook_url", "") if isinstance(target_info, dict) else "")
+        hermes_webhook = _transport(raw_info, "hermes_webhook")
+        target_webhook_url = hermes_webhook.get("url", "") or (raw_info.get("webhook_url", "") if isinstance(raw_info, dict) else "")
         if target_webhook_url:
             try:
                 target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=False)
@@ -1205,12 +1206,12 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     padded_message = f"{header} {message}"
 
     # Part 1: Webhook to target agent's gateway relay.
-    hermes_webhook = _transport(target_info, "hermes_webhook")
-    target_webhook_url = hermes_webhook.get("url", "") or (target_info.get("webhook_url", "") if isinstance(target_info, dict) else "")
+    hermes_webhook = _transport(raw_info, "hermes_webhook")
+    target_webhook_url = hermes_webhook.get("url", "") or (raw_info.get("webhook_url", "") if isinstance(raw_info, dict) else "")
     import hashlib, hmac
     delivery_id = None
     if target_webhook_url:
-        webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (target_info.get("webhook_secret", "") if isinstance(target_info, dict) else "")
+        webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (raw_info.get("webhook_secret", "") if isinstance(raw_info, dict) else "")
         if not webhook_secret:
             return {"error": f"Agent '{agent}' has no webhook_secret configured - HMAC signature required for secure delivery"}
         body = json.dumps({"text": padded_message}, sort_keys=True)
