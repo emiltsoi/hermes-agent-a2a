@@ -686,8 +686,8 @@ def _handle_call_mode2(
         unregister_worker(task_id)
         from .worker_registry import cleanup_zombie_processes
         cleanup_zombie_processes()
-        if proc and proc.poll() is None:
-            proc.wait()  # ensure process is reaped
+        # communicate() already reaps the process on success
+        # Timeout path already waits after kill
 
     if proc is None or proc.returncode != 0:
         err = stderr.strip() if proc else "process not started"
@@ -1207,7 +1207,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (target_info.get("webhook_secret", "") if isinstance(target_info, dict) else "")
         if not webhook_secret:
             return {"error": f"Agent '{agent}' has no webhook_secret configured - HMAC signature required for secure delivery"}
-        body = _json.dumps({"text": padded_message})
+        body = _json.dumps({"text": padded_message}, sort_keys=True)
         sig = hmac.new(
             webhook_secret.encode(),
             body.encode(),
