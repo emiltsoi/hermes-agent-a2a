@@ -254,6 +254,9 @@ def _start_metrics_logger() -> None:
             except Exception as exc:
                 _logger.error("[A2A Metrics] Logger error: %s", exc)
 
+    # NOTE: Daemon thread — final metrics may be lost on fast shutdown.
+    # The logger is killed immediately on interpreter exit without completing
+    # the current iteration. For graceful shutdown, use _stop_metrics_logger().
     thread = threading.Thread(target=log_metrics, daemon=True)
     thread.start()
     _metrics_logger_thread = thread
