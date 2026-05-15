@@ -61,7 +61,7 @@ def _vault():
 
 
 def _resolve_agent_by_name(name: str):
-    from .identity import resolve_agent as _resolve_agent_fn
+    from .identity import resolve_agent as _resolve_agent_fn, get_raw_agent_identity
     return _resolve_agent_fn(name)
 
 
@@ -1168,7 +1168,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         return {"error": f"Agent '{agent}' not found in vault registry"}
 
     # Validate webhook configuration before attempting delivery
-    is_valid, validation_error = _validate_agent_webhook_config(target_info)
+    from .identity import get_raw_agent_identity
+    is_valid, validation_error = _validate_agent_webhook_config(get_raw_agent_identity(agent))
     if not is_valid:
         return {"error": f"Agent '{agent}' webhook configuration invalid: {validation_error}"}
 

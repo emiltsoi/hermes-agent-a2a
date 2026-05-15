@@ -377,6 +377,41 @@ def resolve_agent(name: str) -> Optional[dict]:
     }
 
 
+def get_raw_agent_identity(name: str) -> Optional[dict]:
+    """Return the raw agent identity WITHOUT CR-1 credential stripping.
+
+    For internal validation use only — never return this to external callers.
+    Exposes transports and all fields.
+
+    Args:
+        name: Agent name to look up.
+
+    Returns:
+        Full identity dict including transports, or None if not found.
+    """
+    if not name:
+        return None
+    agent_key = name.lower()
+
+    identity_file = _fleet_root() / "a2a" / "agents" / agent_key / "identity.yaml"
+    try:
+        identity = _load_yaml_file(identity_file)
+        if identity:
+            return identity
+    except Exception:
+        pass
+
+    agent_vault = _hermes_root() / "profiles" / agent_key / "a2a" / "vault.yaml"
+    try:
+        raw = _load_yaml_file(agent_vault) or {}
+    except Exception:
+        return None
+
+    agents = raw.get("agents", {})
+    agent_entry = agents.get(agent_key) or agents.get(name)
+    return agent_entry if agent_entry else None
+
+
 def list_agents() -> list[dict]:
     """Return all agents in the vault registry.
 

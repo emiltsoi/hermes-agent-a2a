@@ -312,10 +312,10 @@ def test_session_message_returns_a2a_shaped_delivery_ack(monkeypatch):
         }
     }
     monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
-        urllib.request,
-        "urlopen",
-        return_value=FakeResponse(),
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch(
+        "hermes_agent_a2a.identity.get_raw_agent_identity", return_value=agent
+    ), patch.object(
+        urllib.request, "urlopen", return_value=FakeResponse()
     ):
         result = tools.handle_send_session_message(message="hello", agent="agent1", task_id="task-123456789")
 
@@ -674,11 +674,13 @@ def test_session_message_validates_before_delivery(monkeypatch):
         def read(self):
             return b'{"delivery_id": "delivery-1"}'
     
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch(
+        "hermes_agent_a2a.identity.get_raw_agent_identity", return_value=agent
+    ), patch.object(
         urllib.request, "urlopen", return_value=FakeResponse()
     ):
         result = tools.handle_send_session_message(message="hello", agent="agent1")
-    
+
     assert result["state"] == "completed"
     assert result["delivery"] == "delivered"
 
@@ -861,11 +863,13 @@ def test_a2a_metrics_command_not_triggered_on_normal_message(monkeypatch):
         def read(self):
             return b'{"delivery_id": "delivery-1"}'
     
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch.object(
+    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch(
+        "hermes_agent_a2a.identity.get_raw_agent_identity", return_value=agent
+    ), patch.object(
         urllib.request, "urlopen", return_value=FakeResponse()
     ):
         result = tools.handle_send_session_message(message="hello", agent="agent1")
-    
+
     # Should not return command_response
     assert result.get("delivery") != "command_response"
     assert result["state"] == "completed"
