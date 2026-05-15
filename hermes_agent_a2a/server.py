@@ -59,10 +59,15 @@ class TaskQueue:
         self._completed: OrderedDict[str, _PendingTask] = OrderedDict()
         self._processing: set[str] = set()
         self._lock = Lock()
+        # Atomic counters — eliminate re-entrancy risk in _get_queue_depth
+        self._enqueue_count = 0
+        self._complete_count = 0
+        self._cancel_count = 0
 
     def pending_count(self) -> int:
+        # Counter-based — no re-entrancy risk, no traversal of singleton
         with self._lock:
-            return len(self._pending)
+            return max(0, self._enqueue_count - self._complete_count - self._cancel_count)
 
     def enqueue(self, task_id: str, text: str, metadata: dict) -> _PendingTask | None:
         task = _PendingTask(task_id, text, metadata)
@@ -72,6 +77,7 @@ class TaskQueue:
             if task_id in self._pending:
                 return None
             self._pending[task_id] = task
+            self._enqueue_count += 1
             # Only evict tasks that are not currently being processed to avoid race
             while len(self._pending) > _TASK_CACHE_MAX:
                 for tid, old_task in list(self._pending.items()):
@@ -102,6 +108,7 @@ class TaskQueue:
             for task in tasks:
                 if task.task_id not in self._pending and task.task_id not in self._processing:
                     self._pending[task.task_id] = task
+                    self._enqueue_count += 1
 
     def mark_processing(self, task_id: str) -> None:
         with self._lock:
@@ -116,6 +123,7 @@ class TaskQueue:
                 task.response = response
                 task.ready.set()
                 self._completed[task_id] = task
+                self._complete_count += 1
                 while len(self._completed) > _TASK_CACHE_MAX:
                     self._completed.popitem(last=False)
         # Record task completed metric
@@ -133,6 +141,7 @@ class TaskQueue:
                 task.response = "(canceled)"
                 task.ready.set()
                 self._completed[task_id] = task
+                self._cancel_count += 1
         # Record task canceled metric
         try:
             from .runtime_state import get_runtime_state as get_state
