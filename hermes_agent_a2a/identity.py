@@ -335,27 +335,12 @@ def resolve_agent(name: str) -> Optional[dict]:
     except Exception:
         identity = None
     if identity:
-        # Strip credentials before returning — auth_token, platforms, and auth.secret from transports
-        def _strip_secrets(d: dict) -> dict:
-            result = {}
-            for k, v in d.items():
-                if k == "auth" and isinstance(v, dict) and "secret" in v:
-                    result[k] = {key: val for key, val in v.items() if key != "secret"}
-                elif isinstance(v, dict):
-                    result[k] = _strip_secrets(v)
-                else:
-                    result[k] = v
-            return result
-        stripped = _strip_secrets(identity)
-        result = {
-            "name": stripped.get("name", ""),
-            "a2a_url": stripped.get("a2a_url", ""),
-            "description": stripped.get("description", ""),
-            "role": stripped.get("role", ""),
+        return {
+            "name": identity.get("name", ""),
+            "a2a_url": identity.get("a2a_url", ""),
+            "description": identity.get("description", ""),
+            "role": identity.get("role", ""),
         }
-        if "transports" in stripped:
-            result["transports"] = stripped["transports"]
-        return result
     agent_vault = _hermes_root() / "profiles" / agent_key / "a2a" / "vault.yaml"
     try:
         raw = _load_yaml_file(agent_vault) or {}
