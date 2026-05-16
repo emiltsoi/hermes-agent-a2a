@@ -131,7 +131,8 @@ def pre_gateway_dispatch(event: str, **kwargs) -> str:
     If the trigger pattern doesn't match or the task isn't found, the original
     text is returned unchanged.
     """
-    event_text = event  # event is a string in this hook context
+    # event may be a MessageEvent object or a string depending on call context
+    event_text = getattr(event, "text", event) if not isinstance(event, str) else event
     if not event_text.startswith("[A2A trigger]"):
         return event_text
 

@@ -7,6 +7,7 @@ returned to the caller.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -19,10 +20,30 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from threading import Event, Lock
 from collections import OrderedDict
 from typing import Optional
+from urllib.parse import urlparse
 import urllib.request
 import urllib.error
 
 from .security import RateLimiter, audit, filter_outbound, sanitize_inbound
+
+
+def _validate_webhook_host(host: str) -> str:
+    """Validate A2A_WEBHOOK_HOST to prevent SSRF in webhook delivery.
+
+    Rejects loopback/private addresses to block abuse via environment variable
+    injection. The webhook_url is built from these values and sent with an HMAC
+    signature, so redirecting it to an attacker-controlled host would leak the
+    signed payload.
+    """
+    # urlparse requires a scheme; prefix to extract the host component safely.
+    parsed = urlparse(f"http://{host}")
+    netloc = parsed.netloc.split(":")[0]
+    if netloc in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise ValueError(
+            f"A2A_WEBHOOK_HOST ({host}) resolves to a loopback address; "
+            "refusing to deliver signed webhook to an internal endpoint from this path"
+        )
+    return host
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +290,6 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
                 on_failure(task_id)
         return
 
-    port = int(os.getenv("WEBHOOK_PORT", "8644"))
     body_dict = {
         "event_type": "a2a_inbound",
         "text": message,
@@ -279,10 +299,17 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
         body_dict["mode"] = mode
     if deliver_only:
         body_dict["deliver_only"] = True
-    # Canonical JSON before HMAC: sort_keys ensures deterministic byte order
-    # regardless of dict insertion order. ensure_ascii=False to avoid
-    # unnecessary escaping of non-ASCII characters in task_id or message.
+    # SSRF guard: reject loopback hosts before building the webhook URL.
+    # Placed after the secret check so a bad env var causes a no-op rather
+    # than an unhandled ValueError when no secret is configured.
     webhook_host = os.getenv("A2A_WEBHOOK_HOST", "127.0.0.1")
+    try:
+        webhook_host = _validate_webhook_host(webhook_host)
+    except ValueError:
+        logger.warning("[A2A] Webhook SSRF guard rejected A2A_WEBHOOK_HOST=%s", webhook_host)
+        if on_failure:
+            on_failure(task_id)
+        return
     webhook_port = int(os.getenv("WEBHOOK_PORT", "8644"))
     webhook_url = f"http://{webhook_host}:{webhook_port}/webhooks/a2a_trigger"
     body = json.dumps(body_dict, sort_keys=True, ensure_ascii=False).encode()
@@ -315,6 +342,10 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
 
 def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10) -> dict:
     """Make a direct A2A JSON-RPC call to an agent.
+
+    NOTE: Must use A2A spec format (params.message.role/parts/metadata) via build_task_send_payload.
+    The non-spec format (params.task.text) causes "Empty message" errors on recipients.
+    Previous revert (f539a9d) was incorrect; spec format is required for compatibility.
 
     Args:
         url: Target agent's A2A endpoint (e.g., http://127.0.0.1:41808/a2a)
@@ -355,6 +386,99 @@ def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "",
         return {"error": f"URL error: {e.reason}", "task_id": task_id}
     except Exception as e:
         return {"error": str(e), "task_id": task_id}
+
+
+def _urlopen_with_status(req, timeout):
+    """Open a URL and return the response object. Used via asyncio.to_thread."""
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+async def _call_a2a_direct_async(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10) -> dict:
+    """Async wrapper for _call_a2a_direct — runs blocking I/O in a thread pool."""
+    return await asyncio.to_thread(_call_a2a_direct, url, message, task_id, auth_token, timeout)
+
+
+async def _trigger_webhook_async(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None, on_failure=None, use_direct_a2a: bool = False, target_url: str = "", auth_token: str = ""):
+    """Async variant of _trigger_webhook — runs blocking I/O in a thread pool.
+
+    Replaces the sync _trigger_webhook when called from an async context to avoid
+    blocking the event loop with urllib.request.urlopen calls.
+    """
+    if use_direct_a2a and target_url:
+        result = await _call_a2a_direct_async(target_url, message, task_id, auth_token)
+        if "error" in result:
+            logger.warning("[A2A] Direct A2A call failed: %s", result["error"])
+            if on_failure:
+                on_failure(task_id)
+        return
+
+    if retries is None:
+        retries = int(os.getenv("A2A_WEBHOOK_RETRIES", "3"))
+    if base_delay is None:
+        base_delay = float(os.getenv("A2A_WEBHOOK_BACKOFF", "1.0"))
+
+    secret = os.getenv("A2A_WEBHOOK_SECRET", "")
+    if not secret:
+        if os.getenv("WEBHOOK_SECRET"):
+            logger.warning("[A2A] A2A_WEBHOOK_SECRET not set, falling back to WEBHOOK_SECRET. This is not recommended for security.")
+            secret = os.getenv("WEBHOOK_SECRET", "")
+        if not secret:
+            if on_failure:
+                on_failure(task_id)
+            return
+
+    # SSRF guard: reject loopback hosts before building the webhook URL.
+    # Placed after the secret check so a bad env var causes a no-op rather
+    # than an unhandled ValueError when no secret is configured.
+    webhook_host = os.getenv("A2A_WEBHOOK_HOST", "127.0.0.1")
+    try:
+        webhook_host = _validate_webhook_host(webhook_host)
+    except ValueError:
+        logger.warning("[A2A] Webhook SSRF guard rejected A2A_WEBHOOK_HOST=%s", webhook_host)
+        if on_failure:
+            on_failure(task_id)
+        return
+    webhook_port = int(os.getenv("WEBHOOK_PORT", "8644"))
+    webhook_url = f"http://{webhook_host}:{webhook_port}/webhooks/a2a_trigger"
+    body_dict = {
+        "event_type": "a2a_inbound",
+        "text": message,
+        "task_id": task_id,
+    }
+    if mode is not None:
+        body_dict["mode"] = mode
+    if deliver_only:
+        body_dict["deliver_only"] = True
+    body = json.dumps(body_dict, sort_keys=True, ensure_ascii=False).encode()
+    sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    req = urllib.request.Request(
+        webhook_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": sig,
+        },
+        method="POST",
+    )
+
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            # Run urlopen in a thread so it doesn't block the event loop.
+            # We read .status before the context manager exits so we capture
+            # the status code after the thread-pool call completes.
+            resp = await asyncio.to_thread(_urlopen_with_status, req, 5)
+            logger.debug("[A2A] Webhook trigger: %d", resp.status)
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt < retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.debug("[A2A] Webhook trigger failed (attempt %d/%d), retrying in %ds: %s", attempt+1, retries, delay, e)
+                await asyncio.to_thread(time.sleep, delay)
+    logger.warning("[A2A] Webhook trigger failed after %d attempts: %s", retries, last_exc)
+    if on_failure:
+        on_failure(task_id)
 
 
 def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:
@@ -567,11 +691,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 t.response = "(webhook delivery failed)"
                 t.ready.set()
 
-        threading.Thread(
-            target=_trigger_webhook,
-            kwargs={"task_id": task_id, "deliver_only": True, "on_failure": _on_webhook_failure},
-            daemon=True,
-        ).start()
+        def _run_async_webhook():
+            asyncio.run(_trigger_webhook_async(
+                task_id=task_id, deliver_only=True, on_failure=_on_webhook_failure
+            ))
+
+        threading.Thread(target=_run_async_webhook, daemon=True).start()
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 

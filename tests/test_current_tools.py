@@ -87,6 +87,36 @@ def test_discover_can_register_external_identity(tmp_path, monkeypatch):
     # Callers must use handle_discover() to get full transport info.
 
 
+def test_discover_rejects_path_traversal_in_agent_card_path(tmp_path, monkeypatch):
+    """CR-2: agent_card_path with '..' must be rejected before any filesystem access."""
+    monkeypatch.setenv("A2A_VAULT_PATH", str(tmp_path))
+    card = {
+        "name": "Evil Agent",
+        "description": "malicious",
+        "version": "1",
+        "skills": [],
+        "capabilities": {},
+    }
+
+    with patch.object(tools, "_http_request", return_value=card):
+        result = tools.handle_discover(
+            url="https://external.example",
+            agent_card_path="../etc/cron.d/malicious",
+            auth_type="api_key",
+            auth_header="X-API-Key",
+            auth_value="secret",
+            register=True,
+            register_as="Evil Agent",
+            rpc_url="https://external.example/rpc",
+            auth_value_env=None,
+        )
+
+    assert ".." in result.get("error", ""), f"Expected error about '..', got: {result}"
+    # Card fetch is rejected before registration is attempted
+    assert result.get("registration", {}).get("registered") is not True, \
+        f"Expected registration not attempted, got: {result}"
+
+
 def test_direct_auth_headers_support_bearer_api_key_and_custom_header():
     assert tools._auth_headers({"type": "bearer", "token": "t"}) == {"Authorization": "Bearer t"}
     assert tools._auth_headers({"type": "api_key", "header": "X-Key", "value": "v"}) == {"X-Key": "v"}
@@ -1348,13 +1378,147 @@ def test_trigger_webhook_uses_direct_a2a_when_flag_set():
         assert call_args[3] == "secret"
 
 
+def test_trigger_webhook_ssrf_guard_rejects_loopback_webhook_host():
+    """CR-1: _trigger_webhook must reject loopback A2A_WEBHOOK_HOST before delivery.
+
+    An attacker who can set A2A_WEBHOOK_HOST=attacker.com could redirect the signed
+    webhook payload to an external host. The SSRF guard blocks localhost/127.0.0.1.
+    """
+    from hermes_agent_a2a.server import _trigger_webhook
+    from hermes_agent_a2a.server import _validate_webhook_host
+    from unittest.mock import patch
+
+    # _validate_webhook_host must reject loopback hosts directly.
+    with pytest.raises(ValueError, match="loopback"):
+        _validate_webhook_host("127.0.0.1")
+
+    with pytest.raises(ValueError, match="loopback"):
+        _validate_webhook_host("localhost")
+
+    # Public hosts must pass without error.
+    _validate_webhook_host("203.0.113.50")  # TEST-NET-2 — not reserved
+    _validate_webhook_host("agent.example.com")
+
+
+def test_trigger_webhook_ssrf_guard_prevents_urlopen_on_loopback_host(monkeypatch):
+    """CR-1: _trigger_webhook must not call urlopen when A2A_WEBHOOK_HOST is loopback.
+
+    Instead of raising, the guard calls on_failure and returns cleanly so that the
+    calling hook does not crash. The on_failure callback receives the task_id.
+    """
+    import importlib
+    import hermes_agent_a2a.server as srv_module
+    importlib.reload(srv_module)
+
+    urlopen_called = []
+    original_urlopen = urllib.request.urlopen
+
+    def track_urlopen(req, timeout=None):
+        urlopen_called.append(req.full_url)
+        return original_urlopen(req, timeout=timeout)
+
+    on_failure_called_for = []
+
+    def track_on_failure(tid):
+        on_failure_called_for.append(tid)
+
+    monkeypatch.setenv("A2A_WEBHOOK_HOST", "127.0.0.1")
+    monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
+
+    with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
+        srv_module._trigger_webhook(
+            message="test", task_id="ssrf-task", on_failure=track_on_failure
+        )
+
+    # urlopen must not have been called — the SSRF guard blocked delivery.
+    assert urlopen_called == [], (
+        f"urlopen was called despite loopback webhook host: {urlopen_called}"
+    )
+    # on_failure must have been called with the task_id so the task can be
+    # marked failed without crashing the caller.
+    assert on_failure_called_for == ["ssrf-task"], (
+        f"on_failure not called; was: {on_failure_called_for}"
+    )
+
+
+def test_trigger_webhook_async_ssrf_guard_prevents_urlopen_on_loopback_host(monkeypatch):
+    """CR-1: _trigger_webhook_async must reject loopback A2A_WEBHOOK_HOST.
+
+    The async variant must also call on_failure and return cleanly rather than
+    propagating the ValueError into the calling hook.
+    """
+    import importlib
+    import asyncio
+    import hermes_agent_a2a.server as srv_module
+    importlib.reload(srv_module)
+
+    urlopen_called = []
+    original_urlopen = urllib.request.urlopen
+
+    def track_urlopen(req, timeout=None):
+        urlopen_called.append(req.full_url)
+        return original_urlopen(req, timeout=timeout)
+
+    on_failure_called_for = []
+
+    def track_on_failure(tid):
+        on_failure_called_for.append(tid)
+
+    monkeypatch.setenv("A2A_WEBHOOK_HOST", "localhost")
+    monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
+
+    with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
+        asyncio.run(srv_module._trigger_webhook_async(
+            message="test", task_id="ssrf-async-task", on_failure=track_on_failure
+        ))
+
+    assert urlopen_called == [], (
+        f"urlopen was called despite loopback webhook host: {urlopen_called}"
+    )
+    assert on_failure_called_for == ["ssrf-async-task"]
+
+
+def test_trigger_webhook_valid_host_allows_urlopen(monkeypatch):
+    """CR-1: _trigger_webhook must call urlopen when A2A_WEBHOOK_HOST is a safe public host."""
+    import importlib
+    import hermes_agent_a2a.server as srv_module
+    importlib.reload(srv_module)
+
+    urlopen_called = []
+    original_urlopen = urllib.request.urlopen
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__enter__ = lambda self: self
+    mock_resp.__exit__ = lambda self, *args: None
+
+    def track_urlopen(req, timeout=None):
+        urlopen_called.append(req.full_url)
+        return mock_resp
+
+    # Use an unroutable IP in TEST-NET range that won't accidentally hit a real service.
+    monkeypatch.setenv("A2A_WEBHOOK_HOST", "203.0.113.50")
+    monkeypatch.setenv("A2A_WEBHOOK_PORT", "8644")
+    monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
+
+    with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
+        srv_module._trigger_webhook(message="test", task_id="safe-task")
+
+    assert len(urlopen_called) == 1, f"Expected exactly 1 urlopen call, got: {urlopen_called}"
+    assert "203.0.113.50" in urlopen_called[0]
+
+
 def test_trigger_webhook_fallback_to_webhook_when_direct_not_enabled():
     """Plugin self-containment: _trigger_webhook() must use webhook when use_direct_a2a=False."""
     from hermes_agent_a2a.server import _trigger_webhook
     from unittest.mock import patch
 
-    # Mock webhook secret to allow webhook path
-    with patch.dict("os.environ", {"A2A_WEBHOOK_SECRET": "test-secret"}):
+    # Mock webhook secret to allow webhook path.
+    # Also set a safe (non-loopback) webhook host so the SSRF guard passes.
+    with patch.dict("os.environ", {
+        "A2A_WEBHOOK_SECRET": "test-secret",
+        "A2A_WEBHOOK_HOST": "203.0.113.99",
+    }):
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_response = MagicMock()
             mock_response.status = 200
@@ -1476,5 +1640,109 @@ def test_2d_cta_behavioral():
     assert metadata_with_skill["sender_name"] == "test-sender"
     # Verify skill is added, not replacing
     assert metadata_with_skill["skill"] == "test-skill"
+
+
+def test_cr1_webhook_url_ssrf_validation_rejects_loopback(tmp_path, monkeypatch):
+    """CR-1: a2a_send_session_message must validate webhook URL for SSRF before delivery.
+
+    A webhook URL pointing to localhost/127.0.0.1 should be rejected with an SSRF check
+    error, preventing delivery to internal services.
+    """
+    vault_root = tmp_path / "fleet"
+    agents_dir = vault_root / "a2a" / "agents"
+    agent_dir = agents_dir / "ssrf-agent"
+    agent_dir.mkdir(parents=True)
+
+    identity_data = {
+        "name": "ssrf-agent",
+        "description": "Agent with SSRF-vulnerable webhook",
+        # Deliberately use a loopback URL — SSRF validation must block this
+        "webhook_url": "http://127.0.0.1:9999/webhook",
+        "webhook_secret": "test-secret",
+    }
+    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
+
+    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
+
+    # SSRF validation fires before any HTTP call, so no mock needed —
+    # the function returns early with the SSRF error before reaching urlopen.
+    result = tools.handle_send_session_message(
+        agent="ssrf-agent",
+        message="test payload",
+        action="do",
+        reply="yes",
+    )
+
+    assert "error" in result, f"Expected SSRF error, got: {result}"
+    assert "SSRF check" in result["error"] and "loopback" in result["error"].lower(), \
+        f"Expected SSRF check error about loopback, got: {result['error']}"
+
+
+def test_cr1_webhook_url_ssrf_validation_rejects_localhost(tmp_path, monkeypatch):
+    """CR-1: webhook URL with 'localhost' must be rejected by SSRF check."""
+    vault_root = tmp_path / "fleet"
+    agents_dir = vault_root / "a2a" / "agents"
+    agent_dir = agents_dir / "localhost-agent"
+    agent_dir.mkdir(parents=True)
+
+    identity_data = {
+        "name": "localhost-agent",
+        "description": "Agent with localhost webhook",
+        "webhook_url": "http://localhost:8080/relay",
+        "webhook_secret": "test-secret",
+    }
+    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
+
+    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
+
+    result = tools.handle_send_session_message(
+        agent="localhost-agent",
+        message="test payload",
+        action="do",
+        reply="yes",
+    )
+
+    assert "error" in result
+    assert "SSRF check" in result["error"] and "loopback" in result["error"].lower()
+
+
+def test_cr1_webhook_url_valid_internet_url_passes_ssrf(tmp_path, monkeypatch):
+    """CR-1: webhook URL pointing to a valid public host must pass SSRF check."""
+    vault_root = tmp_path / "fleet"
+    agents_dir = vault_root / "a2a" / "agents"
+    agent_dir = agents_dir / "public-agent"
+    agent_dir.mkdir(parents=True)
+
+    identity_data = {
+        "name": "public-agent",
+        "description": "Agent with public webhook",
+        "webhook_url": "https://agent.example.com/webhook",
+        "webhook_secret": "test-secret",
+    }
+    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
+
+    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
+
+    # Mock urllib.request.urlopen to prevent real HTTP calls while verifying
+    # the SSRF check passes and the request is actually made.
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"ok": true}'
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=None)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        with patch("hermes_agent_a2a.runtime_state.get_runtime_state") as mock_get_state:
+            mock_metrics = MagicMock()
+            mock_get_state.return_value.get_metrics.return_value = mock_metrics
+            result = tools.handle_send_session_message(
+                agent="public-agent",
+                message="test payload",
+                action="do",
+                reply="yes",
+            )
+
+    # SSRF check should have passed (no SSRF error), and urlopen should have been called
+    assert "SSRF check" not in str(result.get("error", "")), f"Unexpected SSRF error: {result}"
+    assert mock_resp.read.called, f"Expected HTTP delivery after SSRF pass, got: {result}"
 
 

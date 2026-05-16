@@ -74,6 +74,21 @@ def _fleet_agents_root() -> Path:
     return _fleet_root() / "a2a" / "agents"
 
 
+def _is_local_fleet_agent(agent_name: str) -> bool:
+    """Returns True if agent is registered in the local fleet registry."""
+    fleet_path = Path(os.environ.get("A2A_VAULT_PATH", str(Path.home() / ".hermes/fleet")))
+    registry_path = fleet_path / "fleet-registry.yaml"
+    if not registry_path.exists():
+        return False
+    try:
+        import yaml
+        with open(registry_path, encoding="utf-8") as f:
+            registry = yaml.safe_load(f) or {}
+        return agent_name in registry.get("agents", {})
+    except Exception:
+        return False
+
+
 def _derive_hermes_home() -> str:
     """Derive the Hermes root directory from HERMES_HOME or sensible defaults.
     
@@ -426,6 +441,9 @@ def _register_external_agent_identity(
     if target_file.exists() and not overwrite:
         return {"error": f"Identity already exists for '{agent_key}'; pass register_overwrite=true to replace it"}
 
+    if ".." in agent_card_path:
+        return {"error": "agent_card_path contains '..' which is not allowed for security reasons"}
+    safe_path = agent_card_path if agent_card_path.startswith("/") else f"/{agent_card_path}"
     public_auth = _public_auth_config(auth_type, auth_header, auth_token_env, auth_value_env, auth)
     identity = {
         "id": agent_key,
@@ -442,7 +460,7 @@ def _register_external_agent_identity(
             "agent_card": {
                 "protocol": "google-a2a-agent-card",
                 "url": agent_card_url,
-                "path": agent_card_path if agent_card_path.startswith("/") else f"/{agent_card_path}",
+                "path": safe_path,
                 "auth": public_auth,
             },
         },
@@ -1186,7 +1204,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         target_webhook_url = hermes_webhook.get("url", "") or (raw_info.get("webhook_url", "") if isinstance(raw_info, dict) else "")
         if target_webhook_url:
             try:
-                target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=False)
+                target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=_is_local_fleet_agent(agent))
             except ValueError as e:
                 return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
             reachability_timeout = int(os.getenv("A2A_WEBHOOK_REACHABILITY_TIMEOUT", "5"))
@@ -1216,6 +1234,13 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     # Part 1: Webhook to target agent's gateway relay.
     hermes_webhook = _transport(raw_info, "hermes_webhook")
     target_webhook_url = hermes_webhook.get("url", "") or (raw_info.get("webhook_url", "") if isinstance(raw_info, dict) else "")
+    # SSRF check: validate webhook URL before delivery, mirroring the check in _resolve_agent.
+    # Do NOT assume the resolved agent card URL and the webhook URL share the same host.
+    if target_webhook_url:
+        try:
+            target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=_is_local_fleet_agent(agent))
+        except ValueError as e:
+            return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
     import hashlib, hmac
     delivery_id = None
     if target_webhook_url:

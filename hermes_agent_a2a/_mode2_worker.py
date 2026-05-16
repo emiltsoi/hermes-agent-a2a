@@ -10,8 +10,14 @@ import os
 import json
 import uuid
 
+MAX_STDIN_BYTES = 1 * 1024 * 1024  # 1 MB hard limit
+
 def main():
-    params = json.loads(sys.stdin.read())
+    raw = sys.stdin.buffer.read(MAX_STDIN_BYTES + 1)
+    if len(raw) > MAX_STDIN_BYTES:
+        print("ERROR: stdin exceeds 1MB limit", file=sys.stderr)
+        sys.exit(1)
+    params = json.loads(raw)
 
     agent_home = params["agent_home"]
     message = params["message"]
