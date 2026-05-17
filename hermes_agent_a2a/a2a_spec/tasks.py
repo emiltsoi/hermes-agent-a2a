@@ -1,10 +1,32 @@
-"""Google A2A-shaped task payload builders and result parsers."""
+"""Google A2A-shaped task payload builders and result parsers.
+
+Google A2A v1.0 error codes:
+  -32700  Parse error
+  -32600  Invalid Request
+  -32603  Internal error
+  -38000  Task not found
+  -38001  Task not cancelable
+  -38002  Push notification not supported
+  -38003  Invalid state transition
+  -38004  Non-idempotent task
+"""
 
 import uuid
 from typing import Optional
 
+# A2A-spec-compliant error codes
+A2A_ERR_PARSE = -32700
+A2A_ERR_INVALID_REQUEST = -32600
+A2A_ERR_INTERNAL = -32603
+A2A_ERR_TASK_NOT_FOUND = -38000
+A2A_ERR_TASK_NOT_CANCELABLE = -38001
+A2A_ERR_PUSH_NOT_SUPPORTED = -38002
+A2A_ERR_INVALID_STATE_TRANSITION = -38003
+A2A_ERR_NON_IDEMPOTENT = -38004
+
 TERMINAL_STATES = {"completed", "failed", "canceled", "rejected"}
 ACTIVE_STATES = {"submitted", "working"}
+AUTH_STATES = {"auth_required", "authenticated", "rejected"}
 
 
 def is_terminal_state(state: str) -> bool:
@@ -87,6 +109,14 @@ def parse_json_rpc_error(response: dict) -> str:
     if isinstance(rpc_error, dict):
         return rpc_error.get("message") or str(rpc_error)
     return str(rpc_error)
+
+
+def build_error_response(code: int, message: str, data=None) -> dict:
+    """Build a spec-compliant JSON-RPC error response: {code, message, data}."""
+    err = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    return err
 
 
 def parse_task_result(rpc_result: dict, default_task_id: str = "") -> dict:

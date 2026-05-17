@@ -25,6 +25,7 @@ import urllib.request
 import urllib.error
 
 from .security import RateLimiter, audit, filter_outbound, sanitize_inbound
+from .a2a_spec.tasks import build_error_response
 
 
 def _validate_webhook_host(host: str) -> str:
@@ -73,7 +74,36 @@ class _PendingTask:
 
 
 class TaskQueue:
-    """Thread-safe queue for pending A2A tasks."""
+    """Thread-safe queue for pending A2A tasks with full state machine.
+
+    States:
+      submitted     — task received, not yet processing
+      working       — actively being processed
+      auth_required — waiting for authentication
+      authenticated — auth confirmed, waiting to become working
+      completed     — task done, response available
+      failed        — task failed
+      canceled      — task canceled
+      rejected      — task rejected (auth or policy)
+
+    Valid transitions:
+      submitted       → working
+      auth_required   → authenticated, rejected
+      authenticated    → working
+      working          → completed, failed, canceled
+    """
+
+    # State machine definition: from_state → set of allowed to_states
+    _TRANSITIONS: dict[str, set[str]] = {
+        "submitted":     {"working", "completed", "failed", "canceled"},
+        "working":       {"completed", "failed", "canceled"},
+        "auth_required": {"authenticated", "rejected"},
+        "authenticated": {"working", "failed"},
+        "completed":     set(),
+        "failed":        set(),
+        "canceled":      set(),
+        "rejected":      set(),
+    }
 
     def __init__(self):
         self._pending: OrderedDict[str, _PendingTask] = OrderedDict()
@@ -84,6 +114,52 @@ class TaskQueue:
         self._enqueue_count = 0
         self._complete_count = 0
         self._cancel_count = 0
+        # State machine: task_id → current state
+        self._states: dict[str, str] = {}
+
+    def _set_state(self, task_id: str, state: str) -> None:
+        """Set task state, creating it on first access."""
+        self._states[task_id] = state
+
+    def set_auth_required(self, task_id: str, metadata: dict) -> None:
+        """Place a task in auth_required state without queuing it."""
+        with self._lock:
+            self._states[task_id] = "auth_required"
+
+    def set_authenticated(self, task_id: str, metadata: dict) -> None:
+        """Mark a task as authenticated (from auth_required)."""
+        with self._lock:
+            self._states[task_id] = "authenticated"
+
+    def set_rejected(self, task_id: str, metadata: dict) -> None:
+        """Mark a task as rejected."""
+        with self._lock:
+            self._states[task_id] = "rejected"
+
+    def transition(self, task_id: str, to_state: str, return_error: bool = False) -> bool | tuple[bool, int | None]:
+        """Attempt a state transition.
+
+        Args:
+            task_id: The task to transition.
+            to_state: The target state.
+            return_error: If True, return (success, error_code) on failure.
+
+        Returns:
+            True if transition succeeded.
+            If return_error=True, returns (False, error_code) on failure.
+            If return_error=False, returns False on failure.
+        """
+        with self._lock:
+            from_state = self._states.get(task_id, "submitted")
+            allowed = self._TRANSITIONS.get(from_state, set())
+            if to_state in allowed:
+                self._states[task_id] = to_state
+                if return_error:
+                    return True, None
+                return True
+            if return_error:
+                return False, -38003  # Invalid state transition
+            return False
 
     def pending_count(self) -> int:
         # Counter-based — no re-entrancy risk, no traversal of singleton
@@ -98,6 +174,7 @@ class TaskQueue:
             if task_id in self._pending:
                 return None
             self._pending[task_id] = task
+            self._states[task_id] = "submitted"
             # Only evict tasks that are not currently being processed to avoid race
             while len(self._pending) > _TASK_CACHE_MAX:
                 for tid, old_task in list(self._pending.items()):
@@ -146,6 +223,7 @@ class TaskQueue:
                 task.ready.set()
                 self._completed[task_id] = task
                 self._complete_count += 1
+                self._states[task_id] = "completed"
                 while len(self._completed) > _TASK_CACHE_MAX:
                     self._completed.popitem(last=False)
         # Record task completed metric
@@ -164,6 +242,7 @@ class TaskQueue:
                 task.ready.set()
                 self._completed[task_id] = task
                 self._cancel_count += 1
+                self._states[task_id] = "canceled"
         # Record task canceled metric
         try:
             from .runtime_state import get_runtime_state as get_state
@@ -174,12 +253,17 @@ class TaskQueue:
     def get_status(self, task_id: str) -> dict:
         with self._lock:
             if task_id in self._pending:
-                return {"state": "working"}
+                return {"state": self._states.get(task_id, "working")}
             task = self._completed.get(task_id)
             if task:
                 if task.response == "(canceled)":
                     return {"state": "canceled"}
+                if task_id in self._states:
+                    return {"state": self._states[task_id]}
                 return {"state": "completed", "response": filter_outbound(task.response)}
+            # Check pre-queue auth/rejected states
+            if task_id in self._states:
+                return {"state": self._states[task_id]}
         return {"state": "unknown"}
 
     def get_task_metadata(self, task_id: str) -> dict:
@@ -511,8 +595,20 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # CORS headers on all A2A responses (browser-accessible agents)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self) -> None:
+        """Handle CORS preflight requests."""
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
 
     def _check_auth(self) -> bool:
         token = self.server.auth_token
@@ -537,6 +633,93 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(auth_header[7:].strip(), token)
 
+    def _send_sse_stream(self, stream_id: str, task_id: str) -> None:
+        """Stream SSE events to the client for stream_id.
+
+        Events are pushed by TaskStateChangeHook as the task state changes.
+        The stream closes when the task reaches a terminal state or the client
+        disconnects.
+        """
+        from .sse_handler import get_sse_streamer
+
+        streamer = get_sse_streamer()
+
+        # Send initial state event immediately
+        q = _ensure_task_queue()
+        status = q.get_status(task_id)
+        current_state = status.get("state", "unknown")
+
+        def _send_line(line: str) -> bool:
+            """Send one SSE-formatted line. Returns False if client disconnected."""
+            try:
+                self.wfile.write(line.encode())
+                self.wfile.flush()
+                return True
+            except Exception:
+                return False
+
+        # Immediate initial event
+        import json
+        from .hooks import _event_name_for_state as _event_name
+        initial_event_id = str(uuid.uuid4())
+        initial = {
+            "taskId": task_id,
+            "state": current_state,
+            "event": _event_name(current_state),
+        }
+        if not _send_line(f"id: {initial_event_id}\n"):
+            streamer.close_stream(stream_id)
+            return
+        if not _send_line(f"event: {_event_name(current_state)}\n"):
+            streamer.close_stream(stream_id)
+            return
+        if not _send_line(f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"):
+            streamer.close_stream(stream_id)
+            return
+
+        # If task is already in a terminal state, close stream immediately
+        from .a2a_spec.tasks import is_terminal_state
+        if is_terminal_state(current_state):
+            streamer.close_stream(stream_id)
+            return
+
+        # Stream pending events until terminal state or client disconnect
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        import time as _time
+        poll_interval = 0.1  # seconds
+        max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))  # 5 min default
+
+        deadline = _time.time() + max_wait
+        while _time.time() < deadline:
+            lines = streamer.get_pending(stream_id)
+            for line in lines:
+                if not _send_line(line):
+                    streamer.close_stream(stream_id)
+                    return
+
+            # Check if stream was closed (e.g., client disconnect)
+            if streamer.is_closed(stream_id):
+                return
+
+            # Check if task reached terminal state
+            status = q.get_status(task_id)
+            if status.get("state") in terminal_states:
+                # Send final state event and close
+                term_state = status["state"]
+                term_event_id = str(uuid.uuid4())
+                term_event = {"taskId": task_id, "state": term_state, "event": _event_name(term_state)}
+                _send_line(f"id: {term_event_id}\n")
+                _send_line(f"event: {_event_name(term_state)}\n")
+                _send_line(f"data: {json.dumps(term_event, ensure_ascii=False)}\n\n")
+                streamer.close_stream(stream_id)
+                return
+
+            _time.sleep(poll_interval)
+
+        # Timeout — send error and close
+        _send_line('event: error\ndata: {"code": -38000, "message": "SSE stream timed out"}\n\n')
+        streamer.close_stream(stream_id)
+
     def do_GET(self) -> None:
         if self.path == "/.well-known/agent.json":
             self._send_json(self.server.build_agent_card())
@@ -552,7 +735,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._check_auth():
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32000, "message": "Unauthorized"}, "id": None},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Unauthorized", "data": None},
+                    "id": None,
+                },
                 401,
             )
             return
@@ -560,7 +747,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         if not self.server.limiter.allow(self.client_address[0]):
             audit.log("rate_limited", {"client": self.client_address[0]})
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32000, "message": "Rate limit exceeded"}, "id": None},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Rate limit exceeded", "data": None},
+                    "id": None,
+                },
                 429,
             )
             return
@@ -569,14 +760,26 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
         except (ValueError, TypeError):
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Content-Length"}, "id": None},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32600, "message": "Invalid Content-Length", "data": None},
+                    "id": None,
+                },
                 400,
             )
             return
 
         if length <= 0 or length > 65536:
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32600, "message": f"Content-Length must be 1-65536, got {length}"}, "id": None},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32600,
+                        "message": f"Content-Length must be 1-65536, got {length}",
+                        "data": None,
+                    },
+                    "id": None,
+                },
                 413 if length > 65536 else 400,
             )
             return
@@ -585,7 +788,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
         except Exception:
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": "Parse error", "data": None},
+                    "id": None,
+                },
                 400,
             )
             return
@@ -594,33 +801,270 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         params = body.get("params", {})
         rpc_id = body.get("id")
 
+        # Reject requests without the jsonrpc field
+        if body.get("jsonrpc") != "2.0":
+            self._send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32600, "message": "Invalid Request: missing or invalid jsonrpc field", "data": None},
+                    "id": rpc_id if rpc_id is not None else None,
+                },
+                400,
+            )
+            return
+
         audit.log("rpc_request", {"method": method, "client": self.client_address[0]})
 
+        if not method:
+            self._send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32600, "message": "Invalid Request: missing method", "data": None},
+                    "id": rpc_id,
+                },
+                400,
+            )
+            return
+
         if method == "tasks/send":
-            result = self._handle_task_send(params)
+            result = self._handle_task_send(params, rpc_id)
         elif method == "tasks/get":
             tid = params.get("id", "")
             status = _ensure_task_queue().get_status(tid)
+            if status["state"] == "unknown":
+                self._send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -38000, "message": f"Task not found: {tid}", "data": None},
+                        "id": rpc_id,
+                    },
+                    404,
+                )
+                return
             result = {"id": tid, "status": {"state": status["state"]}}
             if status.get("response"):
                 result["artifacts"] = [{"parts": [{"type": "text", "text": filter_outbound(status["response"])}], "index": 0}]
         elif method == "tasks/cancel":
             tid = params.get("id", "")
             from .worker_registry import cancel_worker
+            status = _ensure_task_queue().get_status(tid)
+            if status["state"] == "unknown":
+                self._send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -38000, "message": f"Task not found: {tid}", "data": None},
+                        "id": rpc_id,
+                    },
+                    404,
+                )
+                return
+            if status["state"] in ("completed", "failed", "canceled"):
+                self._send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -38001, "message": f"Task not cancelable: task is {status['state']}", "data": None},
+                        "id": rpc_id,
+                    },
+                    409,
+                )
+                return
             worker_canceled = cancel_worker(tid)
             _ensure_task_queue().cancel(tid)
             result = {"id": tid, "status": {"state": "canceled"}, "metadata": {"hermes": {"worker_canceled": worker_canceled}}}
+        elif method == "tasks/pushNotification/subscribe":
+            tid = params.get("taskId", "")
+            webhook_url = params.get("url", "") or params.get("webhookUrl", "")
+            hmac_key = params.get("hmacKey", "") or params.get("hmac_key", "")
+            subscription_id = params.get("subscriptionId", "")
+            # Unsubscribe if subscriptionId is provided
+            if subscription_id:
+                result = self._handle_push_unsubscribe(params, rpc_id)
+            elif tid and webhook_url and hmac_key:
+                result = self._handle_push_subscribe(params, rpc_id)
+            else:
+                self._send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32600, "message": "Invalid Request: missing required params for pushNotification/subscribe", "data": None},
+                        "id": rpc_id,
+                    },
+                    400,
+                )
+                return
+        elif method == "tasks/pushNotification":
+            subscription_id = params.get("subscriptionId", "")
+            result = self._handle_push_unsubscribe(params, rpc_id)
+        elif method == "tasks/sendSubscribe":
+            # SSE streaming — _handle_send_subscribe writes the SSE response directly and returns None
+            self._handle_send_subscribe(params, rpc_id)
+            return
         else:
-            self._send_json({
-                "jsonrpc": "2.0",
-                "error": {"code": -32601, "message": f"Method not found: {method}"},
-                "id": rpc_id,
-            })
+            self._send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32601, "message": f"Method not found: {method}", "data": None},
+                    "id": rpc_id,
+                },
+                404,
+            )
             return
 
         self._send_json({"jsonrpc": "2.0", "result": result, "id": rpc_id})
 
-    def _handle_task_send(self, params: dict) -> dict:
+    def _handle_send_subscribe(self, params: dict, rpc_id) -> None:
+        """Handle tasks/sendSubscribe — stream SSE events to the client.
+
+        Writes headers + initial state event directly to wfile, then loops
+        polling pending events until the task reaches a terminal state or the
+        client disconnects.
+        """
+        from .sse_handler import get_sse_streamer
+        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state, build_error_response, A2A_ERR_INTERNAL
+
+        tid = params.get("taskId", "")
+        if not tid:
+            self._send_json({"jsonrpc": "2.0", "error": build_error_response(-32600, "Invalid Request: taskId is required")})
+            return
+
+        q = _ensure_task_queue()
+        status = q.get_status(tid)
+        if status["state"] == "unknown":
+            self._send_json({"jsonrpc": "2.0", "error": build_error_response(A2A_ERR_TASK_NOT_FOUND, f"Task not found: {tid}")})
+            return
+
+        streamer = get_sse_streamer()
+        stream_id = streamer.open_stream(tid)
+        current_state = status.get("state", "unknown")
+
+        # Send SSE headers directly — bypass _send_json so Content-Type is text/event-stream
+        import json
+        from .hooks import _event_name_for_state as _event_name
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        # Do NOT send Connection: keep-alive — closing the SSE stream should close
+        # the TCP connection so urllib.request.urlopen.read() returns after data.
+        self.close_connection = True
+        self.send_header("X-Stream-Id", stream_id)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
+        def _send_line(line: str) -> bool:
+            """Send one SSE line. Returns False on client disconnect."""
+            try:
+                self.wfile.write(line.encode())
+                self.wfile.flush()
+                return True
+            except Exception:
+                return False
+
+        # Initial state event
+        initial_event_id = str(uuid.uuid4())
+        initial_payload = json.dumps({"taskId": tid, "state": current_state, "event": _event_name(current_state)}, ensure_ascii=False)
+        if not _send_line(f"id: {initial_event_id}\n"):
+            streamer.close_stream(stream_id)
+            return
+        if not _send_line(f"event: {_event_name(current_state)}\n"):
+            streamer.close_stream(stream_id)
+            return
+        if not _send_line(f"data: {initial_payload}\n\n"):
+            streamer.close_stream(stream_id)
+            return
+
+        # If already terminal, close stream immediately after initial event
+        if is_terminal_state(current_state):
+            streamer.close_stream(stream_id)
+            return
+
+        # Stream pending events until terminal state or client disconnect
+        poll_interval = 0.1
+        max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))
+        deadline = time.time() + max_wait
+
+        while time.time() < deadline:
+            lines = streamer.get_pending(stream_id)
+            for line in lines:
+                if not _send_line(line):
+                    streamer.close_stream(stream_id)
+                    return
+
+            if streamer.is_closed(stream_id):
+                return
+
+            status = q.get_status(tid)
+            if is_terminal_state(status.get("state", "")):
+                term_state = status["state"]
+                term_payload = json.dumps({"taskId": tid, "state": term_state, "event": _event_name(term_state)}, ensure_ascii=False)
+                _send_line(f"event: {_event_name(term_state)}\n")
+                _send_line(f"data: {term_payload}\n\n")
+                streamer.close_stream(stream_id)
+                return
+
+            time.sleep(poll_interval)
+
+        # Timeout
+        _send_line('event: error\ndata: {"code": -38000, "message": "SSE stream timed out"}\n\n')
+        streamer.close_stream(stream_id)
+
+    def _handle_push_subscribe(self, params: dict, rpc_id) -> dict:
+        """Handle push notification subscription: tasks/pushNotification/subscribe."""
+        from .subscription_store import get_subscription_store
+        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
+
+        tid = params.get("taskId", "")
+        webhook_url = params.get("url", "") or params.get("webhookUrl", "")
+        hmac_key = params.get("hmacKey", "") or params.get("hmac_key", "")
+
+        if not tid:
+            return build_error_response(-32600, "Invalid Request: taskId is required")
+        if not webhook_url:
+            return build_error_response(-32600, "Invalid Request: webhook url is required")
+        if not hmac_key:
+            return build_error_response(-32600, "Invalid Request: hmacKey is required")
+
+        q = _ensure_task_queue()
+        status = q.get_status(tid)
+        if status["state"] == "unknown":
+            return build_error_response(
+                A2A_ERR_TASK_NOT_FOUND, f"Task not found: {tid}"
+            )
+
+        try:
+            store = get_subscription_store()
+        except Exception:
+            return build_error_response(
+                -38002, "Push notification not supported"
+            )
+
+        sub_id = store.add(tid, webhook_url, hmac_key)
+        return {"subscriptionId": sub_id, "taskId": tid}
+
+    def _handle_push_unsubscribe(self, params: dict, rpc_id) -> dict:
+        """Handle push notification unsubscribe: DELETE via params."""
+        from .subscription_store import get_subscription_store
+
+        subscription_id = params.get("subscriptionId", "")
+        if not subscription_id:
+            return build_error_response(-32600, "Invalid Request: subscriptionId is required")
+
+        try:
+            store = get_subscription_store()
+        except Exception:
+            return build_error_response(
+                -38002, "Push notification not supported"
+            )
+
+        removed = store.remove(subscription_id)
+        if not removed:
+            return build_error_response(
+                -38000, f"Subscription not found: {subscription_id}"
+            )
+        return {"subscriptionId": subscription_id, "removed": True}
+
+    def _handle_task_send(self, params: dict, rpc_id) -> dict:
         task_id = params.get("id", str(uuid.uuid4()))
         message = params.get("message", {})
 
@@ -666,9 +1110,43 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         audit.log("task_received", {"task_id": task_id, "length": len(user_text)})
 
         q = _ensure_task_queue()
+
+        # --- Idempotency check first (before task_id collision check) ---
+        from .persistence import get_idempotency_store
+        idem_store = get_idempotency_store()
+        idem_key = params.get("idempotencyKey")
+        if idem_key:
+            # Check for payload conflict
+            conflict, existing_task_id = idem_store.check_conflict(idem_key, params)
+            if conflict:
+                self._send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -38004,
+                            "message": f"Non-idempotent task: idempotency key '{idem_key}' already used with a different payload",
+                            "data": {"existingTaskId": existing_task_id},
+                        },
+                        "id": rpc_id,
+                    },
+                    409,
+                )
+                return
+            # Return cached result on replay
+            cached = idem_store.get(idem_key)
+            if cached is not None:
+                cached_task_id, cached_result = cached
+                logger.debug("[A2A] Idempotency replay for key=%s → task_id=%s", idem_key, cached_task_id)
+                return cached_result
+
+        # Task-ID collision check
         if q.find_task_by_id(task_id) is not None:
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32000, "message": "Task ID already in use"}, "id": rpc_id},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -38004, "message": "Task ID already in use", "data": None},
+                    "id": rpc_id,
+                },
                 409,
             )
             return
@@ -676,7 +1154,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         task = q.enqueue(task_id, user_text, metadata)
         if task is None:
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32000, "message": "Agent busy — too many pending tasks"}, "id": rpc_id},
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Agent busy — too many pending tasks", "data": None},
+                    "id": rpc_id,
+                },
                 503,
             )
             return
@@ -710,11 +1192,17 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         filtered = filter_outbound(task.response)
         audit.log("task_completed", {"task_id": task_id, "response_length": len(filtered)})
 
-        return {
+        result = {
             "id": task_id,
             "status": {"state": "completed"},
             "artifacts": [{"parts": [{"type": "text", "text": filtered}], "index": 0}],
         }
+
+        # Store result for idempotency replay
+        if idem_key:
+            idem_store.set(idem_key, task_id, params, result)
+
+        return result
 
 
 class A2AServer(ThreadingHTTPServer):
@@ -747,14 +1235,15 @@ class A2AServer(ThreadingHTTPServer):
             public_url = f"http://{host}:{port}"
         return {
             "name": self.agent_name,
+            "agentId": self.agent_name,
             "description": self.agent_description,
             "url": public_url,
             "version": HERMES_VERSION,
             "protocol": "a2a",
             "protocolVersion": "0.2.0",
             "capabilities": {
-                "streaming": False,
-                "pushNotifications": False,
+                "streaming": True,
+                "pushNotifications": True,
                 "multiTurn": False,
                 "structuredMetadata": True,
             },
@@ -762,7 +1251,6 @@ class A2AServer(ThreadingHTTPServer):
                 {
                     "id": "general",
                     "name": "General Assistant",
-                    "description": "General-purpose AI assistant with tool use, web search, and more",
                 }
             ],
             "authentication": {
