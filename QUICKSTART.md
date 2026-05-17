@@ -146,7 +146,53 @@ a2a_cancel_protocol_task(task_id="local-task-123")
 
 When called with only `task_id`, it cancels a locally registered Hermes worker. With `name` or `url`, it also sends a standard A2A `tasks/cancel` to the remote agent.
 
-## 11. Hermes-only worker tools
+## 11. SSE Streaming (tasks/sendSubscribe)
+
+Subscribe to task state transitions via Server-Sent Events:
+
+```text
+a2a_send_protocol_task(
+  name="target-agent",
+  message="Long-running analysis",
+  skill="streaming"
+)
+```
+
+The agent's A2A server streams SSE events as the task transitions through states (working → completed/failed). The client reads the SSE stream and processes events in real time.
+
+The Agent Card capability `streaming: true` indicates SSE support.
+
+## 12. Push Notifications (tasks/pushNotification)
+
+Register a webhook URL to receive push notifications when a task changes state:
+
+```text
+a2a_send_protocol_task(
+  name="target-agent",
+  message="tasks/pushNotification/subscribe",
+  params={
+    "taskId": "<task-id>",
+    "url": "https://your-server.example/webhook/a2a",
+    "hmacKey": "<your-secret>"
+  }
+)
+```
+
+Push payloads are signed with `X-Hub-Signature-256` (HMAC-SHA256). Verify the signature before processing.
+
+To unsubscribe:
+
+```text
+a2a_send_protocol_task(
+  name="target-agent",
+  message="tasks/pushNotification",
+  params={"subscriptionId": "<subscription-id>"}
+)
+```
+
+The Agent Card capability `pushNotifications: true` indicates push support.
+
+## 13. Hermes-only worker tools
 
 Use these only for Hermes-managed agents, not generic external A2A agents:
 

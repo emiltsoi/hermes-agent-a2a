@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2026-05-17
+
+### Google A2A v1.0 Full Compliance
+
+#### Wave 1 — Core Compliance (P0)
+- **Idempotency keys**: `IdempotencyStore` singleton with 24h TTL. Same-key/same-payload → cached result. Same-key/different-payload → `-38004` error.
+- **Full state machine**: `auth_required`, `authenticated`, `rejected` states added to `TaskQueue._TRANSITIONS`. Invalid transitions → `-38003` error.
+- **Error schema alignment**: All 8 A2A error codes defined (`-32700`, `-32600`, `-32603`, `-38000` through `-38004`). All error responses use `{code, message, data}` format.
+- **CORS headers**: `Access-Control-Allow-Origin: *` on all responses. `do_OPTIONS()` for preflight. Applied to GET, POST, OPTIONS, and error responses.
+- **Agent card schema**: `agentId` field added. `skills[]` uses `{id, name}` per spec.
+
+#### Wave 2 — Streaming & Push (P1)
+- **SSE streaming** (`tasks/sendSubscribe`): Server-Sent Events stream of task state transitions. `SSEStreamer` singleton manages stream lifecycle.
+- **Push notifications** (`tasks/pushNotification/subscribe` + unsubscribe): `SubscriptionStore` persists webhook subscriptions with HMAC key. `PushDelivery` delivers HMAC-SHA256 signed payloads with exponential backoff retry (3 attempts).
+- **Hook wiring**: `TaskStateChangeHook.on_state_change()` broadcasts SSE events and delivers push webhooks on task state transitions.
+
+#### Tests
+- 161 tests passing (50 compliance + 24 SSE + 26 push + 79 current + 2 hybrid)
+- Coverage: subscription_store 100%, sse_handler 94%, push_delivery 80%, server 68%, hooks 39%
+
 ## [3.1.3] - 2026-05-15
 
 ### Security Fixes (CRITICAL)
