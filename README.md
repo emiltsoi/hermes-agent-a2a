@@ -10,7 +10,7 @@
 | Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `tasks/send` and poll `tasks/get`. |
 | Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker with Hermes A2A metadata. |
 | Hermes remote workers | `a2a_run_remote_agent_task` | Ask a remote Hermes A2A server to run its own ephemeral worker. |
-| Session relay | `a2a_send_session_message` | Send one-way through Hermes gateway/session routing and return delivery status. |
+| Session relay | `a2a_send_session_message` | ⚠️ Requires Hermes gateway patches — see [README § Hermes gateway compatibility](#hermes-gateway-compatibility) |
 | Metrics | `a2a_get_metrics` | Get current A2A plugin metrics (uptime, webhook stats, task counts, queue depth). |
 | SSE streaming | `tasks/sendSubscribe` | Stream task state transitions via Server-Sent Events. Agent Card: `streaming: true`. |
 | Push notifications | `tasks/pushNotification/subscribe` | Register webhook URL for push delivery on task state changes. HMAC-SHA256 signed. Agent Card: `pushNotifications: true`. |
