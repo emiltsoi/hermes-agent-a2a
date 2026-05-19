@@ -8,7 +8,7 @@ version = "3.2.1"
 description = "A2A protocol plugin for Hermes Agent — self-contained, fleet-agnostic"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["httpx>=0.27"]
 
 [project.optional-dependencies]
 dev = [
