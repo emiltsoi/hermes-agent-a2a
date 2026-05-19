@@ -384,3 +384,26 @@ class TestSSEFailureModes:
         stream_id = streamer.open_stream("completed-immediate")
         assert stream_id, "Must return a stream_id"
         streamer.close_stream(stream_id)
+
+# ---------------------------------------------------------------------------
+# Performance — Wave C Issue 14
+# ---------------------------------------------------------------------------
+
+class TestSSEPollInterval:
+    """SSE polling must use 0.5s interval (not 0.1s) to avoid thread contention."""
+
+    def test_sse_subscribe_poll_interval_is_0_5_seconds(self):
+        """SSE subscribe loop must use poll_interval=0.5 to reduce thread wakeups.
+
+        0.1s polling creates 10 wakeups/second per client, causing thread contention.
+        0.5s polling reduces this to 2 wakeups/second — still responsive (<1s latency).
+        """
+        import inspect
+        from hermes_agent_a2a.server import A2ARequestHandler
+
+        source = inspect.getsource(A2ARequestHandler._rest_subscribe_to_task)
+        # Verify poll_interval is set to 0.5, not 0.1
+        assert "poll_interval = 0.5" in source, (
+            "SSE subscribe loop must use poll_interval=0.5 to avoid blocking threads. "
+            "Found source:\n" + source[source.find("poll_interval"):source.find("poll_interval")+30]
+        )

@@ -68,8 +68,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8081
-_TASK_CACHE_MAX = 1000
-_MAX_PENDING = 10
+_TASK_CACHE_MAX = 100000
+_MAX_PENDING = 100000
 _RESPONSE_TIMEOUT = int(os.getenv("A2A_RESPONSE_TIMEOUT", "120"))  # seconds to wait for agent response
 
 try:
@@ -135,6 +135,8 @@ class TaskQueue:
         self._cancel_count = 0
         # State machine: task_id → current state
         self._states: dict[str, str] = {}
+        # Oldest pending task created_at — used to skip watchdog scan when queue is young
+        self._oldest_pending_time: Optional[float] = None
 
     def _set_state(self, task_id: str, state: str) -> None:
         """Set task state, creating it on first access."""
@@ -194,6 +196,11 @@ class TaskQueue:
                 return None
             self._pending[task_id] = task
             self._states[task_id] = "submitted"
+            # Track oldest pending time for watchdog optimization
+            if self._oldest_pending_time is None:
+                self._oldest_pending_time = task.created_at
+            else:
+                self._oldest_pending_time = min(self._oldest_pending_time, task.created_at)
             # Only evict tasks that are not currently being processed to avoid race
             evicted = 0
             while len(self._pending) > _TASK_CACHE_MAX:
@@ -203,6 +210,9 @@ class TaskQueue:
                         old_task.response = "(dropped — queue overflow)"
                         old_task.ready.set()
                         evicted += 1
+                        # If evicted task was the oldest, recalculate
+                        if old_task.created_at == self._oldest_pending_time and self._oldest_pending_time is not None:
+                            self._oldest_pending_time = min((t.created_at for t in self._pending.values()), default=None)
                         break
                 else:
                     # All pending tasks are being processed, stop evicting
@@ -245,6 +255,9 @@ class TaskQueue:
                 self._completed[task_id] = task
                 self._complete_count += 1
                 self._states[task_id] = "completed"
+                # Update _oldest_pending_time if we removed the oldest task
+                if task.created_at == self._oldest_pending_time:
+                    self._oldest_pending_time = min((t.created_at for t in self._pending.values()), default=None)
                 while len(self._completed) > _TASK_CACHE_MAX:
                     self._completed.popitem(last=False)
         # Record task completed metric
@@ -264,6 +277,9 @@ class TaskQueue:
                 self._completed[task_id] = task
                 self._cancel_count += 1
                 self._states[task_id] = "canceled"
+                # Update _oldest_pending_time if we removed the oldest task
+                if task.created_at == self._oldest_pending_time:
+                    self._oldest_pending_time = min((t.created_at for t in self._pending.values()), default=None)
         # Record task canceled metric
         try:
             from .runtime_state import get_runtime_state as get_state
@@ -588,6 +604,9 @@ def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:
         while True:
             time.sleep(_RESPONSE_TIMEOUT)
             cutoff = time.time() - 2 * _RESPONSE_TIMEOUT
+            # Skip full scan if queue is too young to have orphans
+            if task_queue._oldest_pending_time is not None and task_queue._oldest_pending_time >= cutoff:
+                continue
             for task in list(task_queue._pending.values()):
                 if task.created_at < cutoff and task.response is None:
                     task.response = "(orphaned — no response)"
@@ -711,8 +730,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         # CORS headers on all A2A responses (browser-accessible agents)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
         self.wfile.write(body)
@@ -727,9 +746,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         elif path == "/message/stream":
             allowed = "POST, OPTIONS"
         else:
-            allowed = "GET, POST, OPTIONS"
+            allowed = "POST, OPTIONS"
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", allowed)
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
@@ -810,7 +829,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # Stream pending events until terminal state or client disconnect
         terminal_states = {"completed", "failed", "canceled", "rejected"}
         import time as _time
-        poll_interval = 0.1  # seconds
+        # 0.5s balances responsiveness (<1s latency) against thread contention.
+        # 0.1s would cause 10 wakeups/second per SSE client — too aggressive.
+        poll_interval = 0.5  # seconds
         max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))  # 5 min default
 
         deadline = _time.time() + max_wait
@@ -982,7 +1003,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # the TCP connection so urllib.request.urlopen.read() returns after data.
         self.close_connection = True
         self.send_header("X-Stream-Id", stream_id)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
@@ -1015,7 +1036,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return
 
         # Stream pending events until terminal state or client disconnect
-        poll_interval = 0.1
+        poll_interval = 0.5  # seconds — 5x fewer wakeups than 0.1s, still responsive
         max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))
         deadline = time.time() + max_wait
 
@@ -1614,7 +1635,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.close_connection = True
         self.send_header("X-Stream-Id", stream_id)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
@@ -1643,7 +1664,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             streamer.close_stream(stream_id)
             return
 
-        poll_interval = 0.1
+        poll_interval = 0.5  # seconds — 5x fewer wakeups than 0.1s, still responsive
         max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))
         deadline = time.time() + max_wait
 
@@ -1845,7 +1866,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.close_connection = True
         self.send_header("X-Stream-Id", stream_id)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
@@ -1865,7 +1886,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         _send_line(f"event: {_event_name('working')}\n")
         _send_line(f"data: {initial_payload}\n\n")
 
-        poll_interval = 0.1
+        poll_interval = 0.5  # seconds — 5x fewer wakeups than 0.1s, still responsive
         max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))
         deadline = time.time() + max_wait
 
@@ -2099,7 +2120,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 "version": HERMES_VERSION,
                 "capabilities": {
                     "streaming": True,
-                    "pushNotifications": True,
+                    "pushNotifications": self.server._push_notifications_capability(),
                     "stateTransitionHistory": False,
                 },
             }
@@ -2122,6 +2143,8 @@ class A2AServer(ThreadingHTTPServer):
         self.auth_token = os.getenv("A2A_AUTH_TOKEN", "")
         self.require_auth = os.getenv("A2A_REQUIRE_AUTH", "").lower() in ("1", "true", "yes")
         self.hmac_key = hmac_key or os.environ.get("A2A_HMAC_KEY")
+        # CORS origins — default to * for backward compat; override via A2A_CORS_ORIGINS
+        self.cors_origins = os.getenv("A2A_CORS_ORIGINS", "*")
         if not self.auth_token:
             logger.warning(
                 "[A2A] No A2A_AUTH_TOKEN set — only localhost requests will be accepted, "
@@ -2131,11 +2154,32 @@ class A2AServer(ThreadingHTTPServer):
         _start_orphaned_task_watchdog(_ensure_task_queue())
         super().__init__((host, port), A2ARequestHandler)
 
+    def _push_notifications_capability(self) -> bool | dict:
+        """Return pushNotifications capability per A2A spec.
+
+        Per the A2A spec, when a webhook URL is configured, pushNotifications
+        must be an object with a webhookUrl field. When not configured, it
+        should be the boolean True to indicate the capability is available
+        but not yet configured.
+        """
+        webhook_host = os.getenv("A2A_WEBHOOK_HOST", "")
+        webhook_port = int(os.getenv("WEBHOOK_PORT", "8644"))
+        # If A2A_WEBHOOK_HOST is set and passes SSRF validation, use object form
+        if webhook_host:
+            try:
+                _validate_webhook_host(webhook_host)
+                webhook_url = f"http://{webhook_host}:{webhook_port}/webhooks/a2a_trigger"
+                return {"webhookUrl": webhook_url}
+            except ValueError:
+                pass
+        return True
+
     def build_agent_card(self) -> dict:
         public_url = os.getenv("A2A_PUBLIC_URL", "").rstrip("/")
         if not public_url:
             host, port = self.server_address
             public_url = f"http://{host}:{port}"
+        push_notif = self._push_notifications_capability()
         return {
             "name": self.agent_name,
             "agentId": self.agent_name,
@@ -2147,7 +2191,7 @@ class A2AServer(ThreadingHTTPServer):
             "provider": {"organization": "Hermes Fleet", "category": "official"},
             "capabilities": {
                 "streaming": True,
-                "pushNotifications": True,
+                "pushNotifications": push_notif,
                 "multiTurn": False,
                 "structuredMetadata": True,
             },

@@ -798,6 +798,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
             proc.kill()
             proc.wait()
         return {
+            "jsonrpc": "2.0",
             "id": task_id,
             "status": {"state": "failed"},
             "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],

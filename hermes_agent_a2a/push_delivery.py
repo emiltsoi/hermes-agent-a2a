@@ -30,6 +30,32 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_ATTEMPTS = 3
 _DEFAULT_BASE_DELAY = 0.5  # seconds
 
+# Module-level httpx.Client for connection pooling (Issue 16)
+_http_client: httpx.Client = httpx.Client(timeout=10.0)
+
+
+def verify_hmac(payload: dict, signature: Optional[str], hmac_key: str) -> bool:
+    """Verify HMAC-SHA256 signature of a JSON payload.
+
+    Args:
+        payload:   The JSON payload dict to verify.
+        signature: The X-Hub-Signature-256 header value (e.g. "sha256=abc123").
+                   May be None if header is missing.
+        hmac_key:  The secret key used for HMAC verification.
+
+    Returns:
+        True if signature is valid and matches payload, False otherwise.
+        Returns False if signature is None/empty (missing header).
+    """
+    if not signature:
+        return False
+    expected = "sha256=" + hmac.new(
+        hmac_key.encode(),
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
 
 class PushDelivery:
     """Delivers signed push notifications to subscriber webhook URLs.
@@ -88,32 +114,42 @@ class PushDelivery:
         Returns True on a 2xx response, False on any failure.
         """
         try:
-            req = self._build_request(url, payload, hmac_key)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                status = resp.status
-                if 200 <= status < 300:
-                    return True
-                logger.warning(
-                    "[PushDelivery] Non-2xx delivery to %s: status=%d",
-                    url, status,
-                )
-                return False
-        except urllib.error.HTTPError as e:
-            if e.code == 401 or e.code == 403:
+            body = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
+            sig = self._sign(payload, hmac_key)
+            headers = {
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": sig,
+            }
+            resp = _http_client.post(url, content=body, headers=headers, timeout=timeout)
+            status = resp.status_code
+            if 200 <= status < 300:
+                return True
+            logger.warning(
+                "[PushDelivery] Non-2xx delivery to %s: status=%d",
+                url, status,
+            )
+            return False
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401 or e.response.status_code == 403:
                 logger.warning(
                     "[PushDelivery] HMAC verification failed (auth rejected) for %s: HTTP %d",
-                    url, e.code,
+                    url, e.response.status_code,
                 )
             else:
                 logger.warning(
-                    "[PushDelivery] HTTP error delivering to %s: HTTP %d %s",
-                    url, e.code, e.reason,
+                    "[PushDelivery] HTTP error delivering to %s: HTTP %d",
+                    url, e.response.status_code,
                 )
             return False
-        except urllib.error.URLError as e:
+        except httpx.TimeoutException:
             logger.warning(
-                "[PushDelivery] URL error delivering to %s: %s",
-                url, e.reason,
+                "[PushDelivery] Timeout delivering to %s", url,
+            )
+            return False
+        except httpx.ConnectError as e:
+            logger.warning(
+                "[PushDelivery] Connection error delivering to %s: %s",
+                url, e,
             )
             return False
         except Exception as e:

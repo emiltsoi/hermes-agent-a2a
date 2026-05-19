@@ -110,10 +110,11 @@ class HermesAgentA2APlugin:
         _start_metrics_logger()
 
     def on_shutdown(self) -> None:
-        """Stop the A2A server thread."""
-        logger.info("[HermesA2A] shutdown — stopping A2A server thread")
+        """Stop the A2A server thread and SSE streamer."""
+        logger.info("[HermesA2A] shutdown — stopping A2A server thread and SSE streamer")
         from .runtime_state import get_runtime_state
         from .server import clear_runtime_server
+        from .sse_handler import get_sse_streamer
         try:
             state = get_runtime_state()
             server = state.get_server()
@@ -122,6 +123,12 @@ class HermesAgentA2APlugin:
                 server.shutdown()
         except Exception as exc:
             logger.debug("Error shutting down A2A server: %s", exc)
+
+        try:
+            streamer = get_sse_streamer()
+            streamer.shutdown()
+        except Exception as exc:
+            logger.debug("Error shutting down SSE streamer: %s", exc)
 
 def register(registry) -> None:
     """Entry point for hermes plugin system."""

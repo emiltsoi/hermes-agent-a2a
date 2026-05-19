@@ -203,13 +203,10 @@ class TestPushDeliveryContract:
         from hermes_agent_a2a.push_delivery import PushDelivery
 
         pusher = PushDelivery()
-        # Use a mock URL that will succeed (httpbin or our own test server)
-        # For unit test: mock the HTTP call
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("hermes_agent_a2a.push_delivery._http_client.post") as mock_post:
             mock_resp = MagicMock()
-            mock_resp.status = 200
-            mock_urlopen.return_value.__enter__ = MagicMock(return_value=mock_resp)
-            mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+            mock_resp.status_code = 200
+            mock_post.return_value = mock_resp
 
             result = pusher.deliver(
                 "https://example.com/callback",
@@ -234,22 +231,20 @@ class TestHMACVerification:
         payload = {"task_id": "hmac-test-1", "state": "working"}
         key = "test-hmac-key-abc"
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("hermes_agent_a2a.push_delivery._http_client.post") as mock_post:
             mock_resp = MagicMock()
-            mock_resp.status = 200
-            mock_urlopen.return_value.__enter__ = MagicMock(return_value=mock_resp)
-            mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+            mock_resp.status_code = 200
+            mock_post.return_value = mock_resp
 
             pusher.deliver("https://example.com/cb", payload, key)
 
-            # Check the request was signed — use header_items() for case-insensitive lookup
-            call_args = mock_urlopen.call_args
-            req = call_args[0][0]
-            # header_items() returns list of (lowercase_key, value) tuples
-            headers_list = req.header_items()
-            sig = next((v for k, v in headers_list if k.lower() == "x-hub-signature-256"), "")
-            assert sig.startswith("sha256="), \
-                f"Payload must be signed with HMAC-SHA256, got: {sig}"
+            call_args = mock_post.call_args
+            _, kwargs = call_args
+            headers = kwargs.get("headers", {})
+            assert "X-Hub-Signature-256" in headers, \
+                f"Request must include X-Hub-Signature-256 header, got headers={headers}"
+            sig = headers["X-Hub-Signature-256"]
+            assert sig.startswith("sha256="), f"HMAC signature must start with sha256=, got: {sig}"
 
     def test_hmac_verify_rejects_tampered_payload(self):
         """If payload is tampered, HMAC verification must fail (server rejects)."""
@@ -281,19 +276,21 @@ class TestRetryLogic:
     def test_deliver_with_retry_retries_on_failure(self):
         """deliver_with_retry must retry on non-2xx with exponential backoff."""
         from hermes_agent_a2a.push_delivery import PushDelivery
+        import httpx
 
         pusher = PushDelivery()
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("hermes_agent_a2a.push_delivery._http_client.post") as mock_post:
             call_times = []
             def side_effect(*args, **kwargs):
                 call_times.append(time.time())
-                raise urllib.error.HTTPError(
-                    "https://example.com/cb", 503, "Service Unavailable",
-                    {}, None
+                raise httpx.HTTPStatusError(
+                    "Server Error",
+                    request=MagicMock(),
+                    response=MagicMock(status_code=503),
                 )
 
-            mock_urlopen.side_effect = side_effect
+            mock_post.side_effect = side_effect
 
             result = pusher.deliver_with_retry(
                 "https://example.com/cb",
@@ -303,7 +300,7 @@ class TestRetryLogic:
             )
 
             assert result is False, "deliver_with_retry must return False when all attempts fail"
-            assert mock_urlopen.call_count == 3, f"Expected 3 attempts, got {mock_urlopen.call_count}"
+            assert mock_post.call_count == 3, f"Expected 3 attempts, got {mock_post.call_count}"
 
             # Verify exponential backoff: delays should increase
             if len(call_times) >= 2:
@@ -313,19 +310,19 @@ class TestRetryLogic:
     def test_deliver_with_retry_succeeds_on_eventual_success(self):
         """deliver_with_retry succeeds if one attempt returns 2xx."""
         from hermes_agent_a2a.push_delivery import PushDelivery
+        import httpx
 
         pusher = PushDelivery()
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.status = 200
+        with patch("hermes_agent_a2a.push_delivery._http_client.post") as mock_post:
             # Fail twice, succeed on third
-            mock_urlopen.return_value.__enter__ = MagicMock(side_effect=[
-                urllib.error.HTTPError("x", 500, "err", {}, None),
-                urllib.error.HTTPError("x", 500, "err", {}, None),
-                mock_resp,
-            ])
-            mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+            fail_resp = MagicMock()
+            fail_resp.status_code = 500
+            success_resp = MagicMock()
+            success_resp.status_code = 200
+            mock_post.side_effect = [
+                fail_resp, fail_resp, success_resp
+            ]
 
             result = pusher.deliver_with_retry(
                 "https://example.com/cb",
@@ -335,7 +332,7 @@ class TestRetryLogic:
             )
 
             assert result is True, "deliver_with_retry must return True on eventual success"
-            assert mock_urlopen.call_count == 3, f"Expected 3 attempts, got {mock_urlopen.call_count}"
+            assert mock_post.call_count == 3, f"Expected 3 attempts, got {mock_post.call_count}"
 
 
 # ---------------------------------------------------------------------------

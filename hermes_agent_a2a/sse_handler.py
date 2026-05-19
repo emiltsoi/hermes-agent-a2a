@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Optional
 
 
@@ -109,6 +109,10 @@ class _Stream:
     closed: bool = False
     # Tracks when the stream was last active (last event push or read)
     idle_since: float = field(default_factory=time.time)
+    # Separate sentinel for idle-timeout decisions — updated on both push and read,
+    # so _close_idle_streams sees a stable snapshot and is not fooled by a
+    # get_pending call that happens right before cleanup runs.
+    _last_activity: float = field(default_factory=time.time)
     # Pending event lines to flush when client reads
     pending: list[str] = field(default_factory=list)
     pending_lock: Lock = field(default_factory=Lock)
@@ -146,6 +150,7 @@ class SSEStreamer:
         self._cleanup_interval = cleanup_interval
         self._cleanup_thread: Optional[Thread] = None
         self._started = False
+        self._shutdown_event = Event()
 
     def open_stream(self, task_id: str) -> str:
         """Open a new SSE stream for task_id.
@@ -175,7 +180,7 @@ class SSEStreamer:
             stream = self._streams.get(stream_id)
             if stream is None or stream.closed:
                 return
-            stream.idle_since = time.time()
+            stream._last_activity = time.time()
             # Assign SSE event ID if not already set (SSE spec: id must be monotonic)
             if event.id is None:
                 stream.sequence_counter += 1
@@ -200,13 +205,14 @@ class SSEStreamer:
     def get_pending(self, stream_id: str) -> list[str]:
         """Return and clear pending SSE lines for a stream (called by HTTP handler).
 
-        Resets idle_since so that a stream being actively read is not closed.
+        Does NOT update _last_activity — only push_event (server-side activity) does.
+        This ensures a stream with no pending events times out even if a client
+        is actively polling it.
         """
         with self._lock:
             stream = self._streams.get(stream_id)
             if stream is None:
                 return []
-            stream.idle_since = time.time()
             with stream.pending_lock:
                 lines = list(stream.pending)
                 stream.pending.clear()
@@ -276,22 +282,32 @@ class SSEStreamer:
         if self._started:
             return
         self._started = True
-        t = Thread(target=self._cleanup_loop, name="sse-idle-cleanup", daemon=True)
-        t.start()
+        self._cleanup_thread = Thread(target=self._cleanup_loop, name="sse-idle-cleanup", daemon=True)
+        self._cleanup_thread.start()
+
+    def shutdown(self) -> None:
+        """Signal the cleanup thread to exit and block until it has joined.
+
+        Safe to call multiple times. After shutdown() the streamer cannot be
+        reused — open_stream() will start a new cleanup thread.
+        """
+        if not self._started:
+            return
+        self._shutdown_event.set()
+        if self._cleanup_thread is not None:
+            self._cleanup_thread.join(timeout=5.0)
 
     def _cleanup_loop(self) -> None:
         """Run every cleanup_interval seconds, closing streams idle > idle_timeout.
 
         Exceptions are caught and logged so the thread runs indefinitely as a
-        daemon until the process exits.
+        daemon until the process exits or shutdown() is called.
         """
         logger = logging.getLogger(__name__)
-        while True:
-            try:
-                time.sleep(self._cleanup_interval)
-            except Exception:
-                # e.g. KeyboardInterrupt / signal during sleep — let it propagate
-                raise
+        while not self._shutdown_event.is_set():
+            self._shutdown_event.wait(timeout=self._cleanup_interval)
+            if self._shutdown_event.is_set():
+                break
             try:
                 self._close_idle_streams(logger)
             except Exception:
@@ -305,7 +321,8 @@ class SSEStreamer:
                 stream = self._streams[stream_id]
                 if stream.closed:
                     continue
-                if now - stream.idle_since > self._idle_timeout:
+                idle = now - stream._last_activity
+                if idle > self._idle_timeout:
                     self._streams.pop(stream_id)
                     # Remove from task index
                     task_streams = self._by_task.get(stream.task_id, [])
@@ -313,9 +330,9 @@ class SSEStreamer:
                         task_streams.remove(stream_id)
                     logger.warning(
                         "sse_handler: closing idle stream_id=%s task_id=%s "
-                        "(idle %.0f s > %.0f s)",
+                        "(idle %.1f s > %.0f s)",
                         stream_id, stream.task_id,
-                        now - stream.idle_since, self._idle_timeout,
+                        idle, self._idle_timeout,
                     )
 
 

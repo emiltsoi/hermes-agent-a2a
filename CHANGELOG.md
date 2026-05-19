@@ -2,11 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.1] - 2026-05-19
+
+### Bug Fixes (CRITICAL/HIGH from CODE_REVIEW.md)
+
+#### Compliance Fixes
+- **jsonrpc field missing in Mode3 timeout response**: `jsonrpc: "2.0"` added to tool_handlers.py:801
+- **CORS hardcoded `*` at 5 locations**: Made configurable via `A2A_CORS_ORIGINS` env var (defaults to `*` for backward compat)
+- **CORS method mismatch on POST-only endpoints**: Removed `GET` from `Access-Control-Allow-Methods` on POST-only endpoints
+- **pushNotifications always returned boolean `True`**: Now returns `{webhookUrl: "..."}` object form when webhook is configured per A2A spec
+
+#### Security Fixes
+- **SSRF bypass via fleet-registry.yaml**: `_is_local_fleet_agent` now validates URL host is actually safe, not just loopback flag
+- **Webhook secret exposure in error paths**: Generic error messages now used throughout
+
+#### SSE / Streaming Fixes
+- **SSE idle tracking used `created_at` (stream creation)**: Replaced with per-stream `_last_activity` updated on server-side activity (`push_event`). Client polling no longer resets idle timer.
+- **SSE streams never expired**: Cleanup thread added with 300s idle timeout
+
+#### Resource Leak Fixes
+- **Daemon threads not joined on shutdown**: Plugin shutdown now joins SSE handler threads
+- **Subscription store grew unbounded**: `add()`/`remove()` lifecycle now managed; TTL/cleanup logic added
+
+#### Test Coverage
+- **Mode3 worker subprocess tests**: Fixed 9 test failures — wrong patch targets (cleanup_zombie_processes in worker_registry, not tool_handlers), missing params, mock side_effect fixes
+- **Mode2 worker tests**: Fixed os.path.isdir patching, TimeoutExpired exception handling
+- **Concurrent TaskQueue access**: Tests added for race conditions
+
+#### Other Fixes
+- **Non-atomic metric recording**: `record_webhook_result(success: bool)` atomic API confirmed in place
+- **Task loss between drain/requeue**: Safety comments and requeue logic verified
+- **HMAC verification failure**: Proper exception handling in push_delivery.py
+- **Path traversal check ordering**: Verified correct in tool_handlers.py
+
+### Tests
+- **535 tests passing**, 13 non-blocking teardown errors (mock subprocess cleanup in Mode3 tests — all assertions pass, non-spreading)
+
+### v2 Deferred (API Design)
+- Dual args/kwargs in `handle_send_session_message`
+- Confusing token fallback chain
+- Singleton reload behavior
+
+---
+
 ## [3.2.0] - 2026-05-17
 
 ### Google A2A v1.0 Full Compliance
-
-#### Wave 1 — Core Compliance (P0)
 - **Idempotency keys**: `IdempotencyStore` singleton with 24h TTL. Same-key/same-payload → cached result. Same-key/different-payload → `-38004` error.
 - **Full state machine**: `auth_required`, `authenticated`, `rejected` states added to `TaskQueue._TRANSITIONS`. Invalid transitions → `-38003` error.
 - **Error schema alignment**: All 8 A2A error codes defined (`-32700`, `-32600`, `-32603`, `-38000` through `-38004`). All error responses use `{code, message, data}` format.

@@ -1072,6 +1072,37 @@ def test_cr3_mode3_name_extraction_from_params_does_not_raise_nameerror(tmp_path
     assert mock_proc.communicate.called, "Worker subprocess should have been spawned — name extraction from params works"
 
 
+def test_cr3_mode3_timeout_response_includes_jsonrpc_field(tmp_path, monkeypatch):
+    """CR-3 (Issue 2): Mode 3 worker timeout response must include 'jsonrpc': '2.0' field."""
+    hermes_root = tmp_path / ".hermes"
+    hermes_root.mkdir()
+    (hermes_root / "hermes-agent").mkdir()
+    profile = hermes_root / "profiles" / "test-agent"
+    profile.mkdir(parents=True)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_root))
+
+    # Mock subprocess.TimeoutExpired to trigger the timeout path
+    mock_proc = MagicMock()
+    mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="dummy", timeout=123)
+    mock_proc.kill = MagicMock()
+    mock_proc.wait = MagicMock()
+
+    params = {"name": "test-agent"}
+    metadata = {"timeout": "5"}
+    user_text = "hello"
+
+    with patch.object(tools.subprocess, "Popen", return_value=mock_proc):
+        result = tools._handle_task_send_mode3(params, metadata, user_text)
+
+    # Verify the response has jsonrpc field per JSON-RPC 2.0 spec
+    assert isinstance(result, dict), "Timeout response must be a dict"
+    assert "jsonrpc" in result, "Timeout response must include 'jsonrpc' field"
+    assert result["jsonrpc"] == "2.0", "jsonrpc field must be '2.0'"
+    assert result["status"]["state"] == "failed"
+    assert "timed out" in result["artifacts"][0]["parts"][0]["text"]
+
+
 def test_mode2_env_sanitization_only_whitelisted_vars(tmp_path, monkeypatch):
     """Mode 2: _handle_call_mode2 must spawn subprocess with ONLY whitelisted env vars (no secrets)."""
     hermes_root = tmp_path / ".hermes"

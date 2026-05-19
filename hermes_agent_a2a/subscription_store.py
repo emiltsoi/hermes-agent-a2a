@@ -32,10 +32,11 @@ class SubscriptionStore:
         get(task_id: str) → list[Subscription]
     """
 
-    def __init__(self):
+    def __init__(self, max_age: float = 3600.0):
         self._store: dict[str, Subscription] = {}  # subscription_id → Subscription
         self._by_task: dict[str, set[str]] = {}    # task_id → set of subscription_ids
         self._lock = Lock()
+        self._max_age = max_age
 
     def add(self, task_id: str, url: str, hmac_key: str) -> str:
         """Register a new subscription for a task.
@@ -43,6 +44,10 @@ class SubscriptionStore:
         Returns the new subscription_id.
         """
         with self._lock:
+            # Lazy cleanup: only when >10 expired subscriptions exist
+            if len(self._store) > 10:
+                self._cleanup_expired_locked()
+
             sub_id = str(uuid.uuid4())
             sub = Subscription(
                 subscription_id=sub_id,
@@ -53,6 +58,29 @@ class SubscriptionStore:
             self._store[sub_id] = sub
             self._by_task.setdefault(task_id, set()).add(sub_id)
             return sub_id
+
+    def _cleanup_expired(self) -> int:
+        """Remove subscriptions older than max_age.
+
+        Returns the number of subscriptions removed.
+        """
+        with self._lock:
+            return self._cleanup_expired_locked()
+
+    def _cleanup_expired_locked(self) -> int:
+        """Remove subscriptions older than max_age. Caller must hold the lock."""
+        if not self._store:
+            return 0
+        now = time.time()
+        expired_ids = [
+            sid for sid, sub in self._store.items()
+            if now - sub.created_at > self._max_age
+        ]
+        for sid in expired_ids:
+            sub = self._store.pop(sid, None)
+            if sub is not None:
+                self._by_task.get(sub.task_id, set()).discard(sid)
+        return len(expired_ids)
 
     def remove(self, subscription_id: str) -> bool:
         """Remove a subscription by ID.

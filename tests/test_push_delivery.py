@@ -241,3 +241,202 @@ class TestDeliverPushNotification:
         from hermes_agent_a2a.push_delivery import deliver_push_notification
         result = deliver_push_notification("nonexistent-task", "nonexistent-config", {"foo": "bar"})
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# HMAC Verification
+# ---------------------------------------------------------------------------
+
+from hermes_agent_a2a.push_delivery import verify_hmac
+
+
+class TestVerifyHMACValidSignature:
+    """verify_hmac returns True when signature is correct."""
+
+    def test_valid_hmac_key_produces_correct_signature(self):
+        """A valid HMAC key produces a signature that verify_hmac accepts."""
+        payload = {"event": "task.completed", "task_id": "t-1"}
+        hmac_key = "my-secret-webhook-key"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(payload, hmac_key)
+
+        assert verify_hmac(payload, signature, hmac_key) is True
+
+    def test_valid_signature_with_nested_payload(self):
+        """verify_hmac accepts valid signature for nested JSON payload."""
+        payload = {
+            "kind": "artifact",
+            "contextId": "ctx-1",
+            "taskId": "t-2",
+            "artifact": {"name": "test", "parts": [{"text": "hello"}]},
+        }
+        hmac_key = "another-secret"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(payload, hmac_key)
+
+        assert verify_hmac(payload, signature, hmac_key) is True
+
+    def test_valid_signature_with_empty_payload(self):
+        """verify_hmac accepts valid signature for empty dict payload."""
+        payload = {}
+        hmac_key = "empty-payload-key"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(payload, hmac_key)
+
+        assert verify_hmac(payload, signature, hmac_key) is True
+
+
+class TestVerifyHMACWrongKey:
+    """verify_hmac returns False when wrong key is used."""
+
+    def test_wrong_hmac_key_returns_false(self):
+        """Using a different key than the one used to sign produces invalid signature."""
+        payload = {"event": "task.completed"}
+        signing_key = "correct-key"
+        wrong_key = "wrong-key"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(payload, signing_key)
+
+        assert verify_hmac(payload, signature, wrong_key) is False
+
+    def test_tampered_key_returns_false(self):
+        """A key with extra characters appended is rejected."""
+        payload = {"foo": "bar"}
+        correct_key = "secret-key"
+        tampered_key = "secret-key-extra"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(payload, correct_key)
+
+        assert verify_hmac(payload, signature, tampered_key) is False
+
+    def test_empty_wrong_key_returns_false(self):
+        """An empty string as key produces a different signature."""
+        payload = {"test": "data"}
+        real_key = "real-key"
+        empty_key = ""
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(payload, real_key)
+
+        assert verify_hmac(payload, signature, empty_key) is False
+
+
+class TestVerifyHMACTamperedPayload:
+    """verify_hmac returns False when payload has been tampered with."""
+
+    def test_tampered_payload_is_detected_and_rejected(self):
+        """Modifying payload after signing causes verification to fail."""
+        original_payload = {"event": "task.completed", "task_id": "t-1"}
+        tampered_payload = {"event": "task.completed", "task_id": "t-999"}
+        hmac_key = "my-secret"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(original_payload, hmac_key)
+
+        assert verify_hmac(tampered_payload, signature, hmac_key) is False
+
+    def test_added_field_is_detected(self):
+        """Adding a field to payload after signing is detected."""
+        original_payload = {"event": "task.started"}
+        modified_payload = {"event": "task.started", "extra": "value"}
+        hmac_key = "key-123"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(original_payload, hmac_key)
+
+        assert verify_hmac(modified_payload, signature, hmac_key) is False
+
+    def test_removed_field_is_detected(self):
+        """Removing a field from payload after signing is detected."""
+        original_payload = {"event": "task.completed", "task_id": "t-1"}
+        modified_payload = {"event": "task.completed"}
+        hmac_key = "key-456"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(original_payload, hmac_key)
+
+        assert verify_hmac(modified_payload, signature, hmac_key) is False
+
+    def test_modified_nested_value_is_detected(self):
+        """Modifying a nested value in payload is detected."""
+        original_payload = {
+            "kind": "artifact",
+            "artifact": {"name": "original"},
+        }
+        modified_payload = {
+            "kind": "artifact",
+            "artifact": {"name": "modified"},
+        }
+        hmac_key = "nested-key"
+
+        from hermes_agent_a2a.push_delivery import PushDelivery
+        pusher = PushDelivery()
+        signature = pusher._sign(original_payload, hmac_key)
+
+        assert verify_hmac(modified_payload, signature, hmac_key) is False
+
+
+class TestVerifyHMACMissingSignature:
+    """verify_hmac handles missing/empty X-Hub-Signature-256 header gracefully."""
+
+    def test_missing_signature_header_returns_false(self):
+        """None signature (missing header) is rejected."""
+        payload = {"event": "test"}
+        hmac_key = "any-key"
+
+        assert verify_hmac(payload, None, hmac_key) is False
+
+    def test_empty_string_signature_returns_false(self):
+        """Empty string signature is rejected."""
+        payload = {"event": "test"}
+        hmac_key = "any-key"
+
+        assert verify_hmac(payload, "", hmac_key) is False
+
+    def test_whitespace_only_signature_returns_false(self):
+        """Whitespace-only signature is rejected."""
+        payload = {"event": "test"}
+        hmac_key = "any-key"
+
+        assert verify_hmac(payload, "   ", hmac_key) is False
+
+    def test_invalid_format_signature_returns_false(self):
+        """Signature without sha256= prefix is rejected."""
+        payload = {"event": "test"}
+        hmac_key = "any-key"
+
+        # This is the raw hexdigest without the sha256= prefix
+        import hashlib
+        import hmac as _hmac
+        import json
+        raw_sig = _hmac.new(
+            hmac_key.encode(),
+            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        assert verify_hmac(payload, raw_sig, hmac_key) is False
+
+    def test_wrong_prefix_signature_returns_false(self):
+        """Signature with wrong algorithm prefix is rejected."""
+        payload = {"event": "test"}
+        hmac_key = "any-key"
+
+        # sha1= prefix instead of sha256=
+        wrong_prefix_sig = "sha1=" + "a" * 64
+
+        assert verify_hmac(payload, wrong_prefix_sig, hmac_key) is False
