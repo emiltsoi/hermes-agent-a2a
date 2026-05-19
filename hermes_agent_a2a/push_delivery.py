@@ -10,10 +10,20 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from typing import Optional
+
+import httpx
+
+from hermes_agent_a2a.a2a_spec.push import (
+    AuthenticationInfo,
+    TaskPushNotificationConfig,
+)
+from hermes_agent_a2a.security import validate_webhook_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +155,168 @@ class PushDelivery:
         return False
 
 
+# ---------------------------------------------------------------------------
+# In-memory config store
+# ---------------------------------------------------------------------------
+
+_config_store: dict[str, TaskPushNotificationConfig] = {}
+_config_store_lock = threading.Lock()
+
+
+def create_push_config(
+    task_id: str,
+    push_transport_type: str,
+    endpoint: str,
+    authentication: Optional[AuthenticationInfo] = None,
+    metadata: Optional[dict] = None,
+) -> TaskPushNotificationConfig:
+    """Create a push notification config for a task.
+
+    Generates a unique config_id using uuid4.
+    """
+    config_id = str(uuid.uuid4())
+    cfg = TaskPushNotificationConfig(
+        id=config_id,
+        task_id=task_id,
+        push_transport_type=push_transport_type,
+        endpoint=endpoint,
+        authentication=authentication,
+        metadata=metadata,
+    )
+    with _config_store_lock:
+        _config_store[config_id] = cfg
+    return cfg
+
+
+def get_push_config(task_id: str, config_id: str) -> Optional[TaskPushNotificationConfig]:
+    """Retrieve a single push notification config by task_id and config_id.
+
+    Returns None if task_id has no matching config or config_id is unknown.
+    """
+    with _config_store_lock:
+        cfg = _config_store.get(config_id)
+        if cfg is not None and cfg.task_id == task_id:
+            return cfg
+        return None
+
+
+def list_push_configs(task_id: str) -> list[TaskPushNotificationConfig]:
+    """List all push notification configs registered for a task."""
+    with _config_store_lock:
+        return [cfg for cfg in _config_store.values() if cfg.task_id == task_id]
+
+
+def delete_push_config(task_id: str, config_id: str) -> Optional[str]:
+    """Delete a push notification config.
+
+    Returns the deleted config_id on success, None if not found.
+    """
+    with _config_store_lock:
+        cfg = _config_store.get(config_id)
+        if cfg is None or cfg.task_id != task_id:
+            return None
+        del _config_store[config_id]
+        return config_id
+
+
+def deliver_push_notification(
+    task_id: str,
+    config_id: str,
+    payload: dict,
+    timeout: float = 10.0,
+) -> bool:
+    """Deliver a JSON payload to the configured push notification endpoint.
+
+    Uses an httpx synchronous client to POST the payload.
+    Handles httpx.TimeoutException and httpx.ConnectError gracefully,
+    returning False without raising.
+
+    Returns True on a 2xx response, False on any failure.
+    """
+    cfg = get_push_config(task_id, config_id)
+    if cfg is None:
+        logger.warning(
+            "[PushDelivery] No push config found for task_id=%s config_id=%s",
+            task_id, config_id,
+        )
+        return False
+
+    safe, reason = validate_webhook_endpoint(cfg.endpoint)
+    if not safe:
+        logger.warning(
+            "[PushDelivery] SSRF blocked for push config %s: %s",
+            config_id, reason,
+        )
+        return False
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(cfg.endpoint, json=payload)
+            if 200 <= resp.status_code < 300:
+                return True
+            logger.warning(
+                "[PushDelivery] Non-2xx delivery to %s: status=%d",
+                cfg.endpoint, resp.status_code,
+            )
+            return False
+    except httpx.TimeoutException:
+        logger.warning(
+            "[PushDelivery] Timeout delivering to %s", cfg.endpoint,
+        )
+        return False
+    except httpx.ConnectError as e:
+        logger.warning(
+            "[PushDelivery] Connection error delivering to %s: %s", cfg.endpoint, e,
+        )
+        return False
+    except Exception as e:
+        logger.warning(
+            "[PushDelivery] Unexpected error delivering to %s: %s", cfg.endpoint, e,
+        )
+        return False
+
+
+def deliver_artifact_push(
+    task_id: str,
+    config_id: str,
+    context_id: str,
+    artifact: dict,
+    metadata: Optional[dict] = None,
+    timeout: float = 10.0,
+) -> bool:
+    """Deliver a TaskArtifactUpdateEvent as a push notification.
+
+    Builds a payload matching the TaskArtifactUpdateEvent SSE format and
+    delivers it to the configured push webhook endpoint.
+
+    Args:
+        task_id:    The task that generated the artifact.
+        config_id:  The push notification config ID for this subscription.
+        context_id: The context ID for this task.
+        artifact:   The A2A artifact dict.
+        metadata:   Optional event metadata.
+        timeout:    HTTP timeout in seconds.
+
+    Returns:
+        True on a 2xx response, False on any failure.
+    """
+    payload = {
+        "kind": "artifact",
+        "contextId": context_id,
+        "taskId": task_id,
+        "artifact": artifact,
+        "metadata": metadata or {},
+    }
+    return deliver_push_notification(task_id, config_id, payload, timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton (existing PushDelivery class)
+# ---------------------------------------------------------------------------
+
 # Module-level singleton
 _pusher: Optional[PushDelivery] = None
-_pusher_lock = __import__("threading").Lock()
+_pusher_lock = threading.Lock()
 
 
 def get_push_delivery() -> PushDelivery:

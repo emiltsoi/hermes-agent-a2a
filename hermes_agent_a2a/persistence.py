@@ -6,15 +6,24 @@ Format matches ~/inbox/conversations/{agent}/{date}.md for consistency.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Optional
 
-_HERMES_HOME = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
-_CONV_DIR = Path(_HERMES_HOME) / "a2a_conversations"
+logger = logging.getLogger(__name__)
+
+def _get_hermes_home() -> str:
+    """Return HERMES_HOME, reading the env var each call so changes are reflected."""
+    return os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+
+
+def _get_conv_dir() -> Path:
+    """Return the conversations directory, reading HERMES_HOME each call."""
+    return Path(_get_hermes_home()) / "a2a_conversations"
 _lock = Lock()
 _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB per conversation file
 
@@ -23,6 +32,7 @@ _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB per conversation file
 # ---------------------------------------------------------------------------
 
 _IDEM_TTL_SECONDS = 24 * 3600  # 24 hours default
+_IDEM_CLEANUP_INTERVAL_SECONDS = 3600  # 1 hour default
 
 
 class IdempotencyStore:
@@ -33,11 +43,40 @@ class IdempotencyStore:
     On replay with the same key + different payload, raises KeyConflictError.
     """
 
-    def __init__(self, ttl_seconds: int = _IDEM_TTL_SECONDS):
+    def __init__(
+        self,
+        ttl_seconds: int = _IDEM_TTL_SECONDS,
+        cleanup_interval_seconds: int = _IDEM_CLEANUP_INTERVAL_SECONDS,
+    ):
         self._store: dict[str, tuple[str, str, dict, float]] = {}  # key → (task_id, payload_hash, result, expires_at)
         self._lock = Lock()
         self._ttl = ttl_seconds
+        self._cleanup_interval = cleanup_interval_seconds
+        self._cleanup_thread: Optional[Thread] = None
+        self._stop_cleanup = False
 
+    def _start_cleanup_thread(self) -> None:
+        """Start the background TTL eviction thread (lazy init, runs once)."""
+        if self._cleanup_thread is not None:
+            return
+
+        def loop() -> None:
+            while not self._stop_cleanup:
+                time.sleep(self._cleanup_interval)
+                if self._stop_cleanup:
+                    break
+                try:
+                    evicted = self.evict_expired()
+                    if evicted:
+                        logger.debug("IdempotencyStore: evicted %d expired entries", evicted)
+                except Exception:
+                    logger.exception("IdempotencyStore: error during TTL eviction")
+
+        t = Thread(target=loop, daemon=True, name="IdempotencyStore-cleanup")
+        t.start()
+        self._cleanup_thread = t
+
+    @staticmethod
     def _payload_hash(payload: dict) -> str:
         """Stable hash of the JSON-RPC params for conflict detection."""
         # Normalize: sort keys and use JSON
@@ -48,6 +87,7 @@ class IdempotencyStore:
 
     def get(self, idempotency_key: str) -> tuple[str, dict] | None:
         """Return (task_id, result) if key exists and has not expired, else None."""
+        self._start_cleanup_thread()
         with self._lock:
             entry = self._store.get(idempotency_key)
             if entry is None:
@@ -65,6 +105,7 @@ class IdempotencyStore:
         is_conflict=True  → same key, DIFFERENT payload → reject (-38004).
         is_conflict=False → key is free, or same payload is in use (replay allowed).
         """
+        self._start_cleanup_thread()
         with self._lock:
             entry = self._store.get(idempotency_key)
             if entry is None:
@@ -80,6 +121,7 @@ class IdempotencyStore:
 
     def set(self, idempotency_key: str, task_id: str, payload: dict, result: dict) -> None:
         """Store or update an idempotency key entry."""
+        self._start_cleanup_thread()
         with self._lock:
             expires_at = time.time() + self._ttl
             self._store[idempotency_key] = (
@@ -129,7 +171,7 @@ def save_exchange(
     today = now.strftime("%Y-%m-%d")
     timestamp = now.strftime("%H:%M:%S")
     safe_name = "".join(c if c.isalnum() or c in "-_.@ " else "_" for c in agent_name.lower())
-    directory = _CONV_DIR / safe_name
+    directory = _get_conv_dir() / safe_name
     filepath = directory / f"{today}.md"
 
     intent = (metadata or {}).get("intent", "")
@@ -183,7 +225,7 @@ def update_exchange(
     safe_name = "".join(c if c.isalnum() or c in "-_.@ " else "_" for c in agent_name.lower())
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
-    filepath = _CONV_DIR / safe_name / f"{today}.md"
+    filepath = _get_conv_dir() / safe_name / f"{today}.md"
 
     if not filepath.exists():
         return False

@@ -550,7 +550,73 @@ class TestCORS:
 
 
 # ---------------------------------------------------------------------------
-# 5. AGENT CARD SCHEMA VALIDATION
+# 6. TASK STATE MACHINE FIXES (F-A001, F-F005, F-C002)
+# ---------------------------------------------------------------------------
+
+class TestTaskStateMachine:
+    """Feature 6: INPUT_REQUIRED (6) and AUTH_REQUIRED (8) are INTERRUPTED, not terminal.
+
+    Per the Google A2A proto3 spec, TaskState values 6 (INPUT_REQUIRED) and 8
+    (AUTH_REQUIRED) represent interrupted-but-alive tasks that can be resumed.
+    They must NOT be in TERMINAL_STATES, and MUST be in ACTIVE_STATES.
+    """
+
+    def test_input_required_is_not_terminal(self):
+        """is_terminal_state('input_required') must return False.
+
+        F-A001 fix: input_required was incorrectly listed in TERMINAL_STATES.
+        Per spec it is an INTERRUPTED state — the task is alive and awaiting input.
+        """
+        from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state
+        assert is_terminal_state("input_required") is False, \
+            "input_required is an INTERRUPTED state, not terminal"
+
+    def test_auth_required_is_not_terminal(self):
+        """is_terminal_state('auth_required') must return False.
+
+        F-F005 fix: auth_required was incorrectly listed in TERMINAL_STATES.
+        Per spec it is an INTERRUPTED state — the task is alive and awaiting auth.
+        """
+        from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state
+        assert is_terminal_state("auth_required") is False, \
+            "auth_required is an INTERRUPTED state, not terminal"
+
+    def test_completed_is_terminal(self):
+        """is_terminal_state('completed') must return True (sanity check)."""
+        from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state
+        assert is_terminal_state("completed") is True
+
+    def test_failed_is_terminal(self):
+        """is_terminal_state('failed') must return True (sanity check)."""
+        from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state
+        assert is_terminal_state("failed") is True
+
+    def test_canceled_is_terminal(self):
+        """is_terminal_state('canceled') must return True (sanity check)."""
+        from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state
+        assert is_terminal_state("canceled") is True
+
+    def test_rejected_is_auth_substate(self):
+        """rejected is an AUTH sub-state, not a terminal TaskState."""
+        from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state, AUTH_STATES
+        assert is_terminal_state("rejected") is False
+        assert "rejected" in AUTH_STATES
+
+    def test_active_states_contains_input_required(self):
+        """ACTIVE_STATES must contain 'input_required' (F-C002 fix)."""
+        from hermes_agent_a2a.a2a_spec.tasks import ACTIVE_STATES
+        assert "input_required" in ACTIVE_STATES, \
+            "ACTIVE_STATES must include 'input_required' (task is alive, awaiting input)"
+
+    def test_active_states_contains_auth_required(self):
+        """ACTIVE_STATES must contain 'auth_required' (F-C002 fix)."""
+        from hermes_agent_a2a.a2a_spec.tasks import ACTIVE_STATES
+        assert "auth_required" in ACTIVE_STATES, \
+            "ACTIVE_STATES must include 'auth_required' (task is alive, awaiting auth)"
+
+
+# ---------------------------------------------------------------------------
+# 7. AGENT CARD SCHEMA VALIDATION
 # ---------------------------------------------------------------------------
 
 class TestAgentCard:

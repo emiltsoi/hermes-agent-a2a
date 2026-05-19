@@ -52,6 +52,15 @@ class A2AMetrics:
             self._webhook_attempts += 1
             self._webhook_successes += 1
 
+    def record_webhook_result(self, success: bool) -> None:
+        """Atomically record a webhook result (attempt + success or failure)."""
+        with self._lock:
+            self._webhook_attempts += 1
+            if success:
+                self._webhook_successes += 1
+            else:
+                self._webhook_failures += 1
+
     def record_task_received(self) -> None:
         with self._lock:
             self._tasks_received += 1

@@ -26,7 +26,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_HERMES_HOME = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+def _get_hermes_home() -> str:
+    """Return HERMES_HOME, reading the env var each call so changes are reflected."""
+    from .persistence import _get_hermes_home as _persistence_home
+    return _persistence_home()
+
+_HERMES_HOME = _get_hermes_home()
 
 
 def _get_task_queue():
@@ -60,12 +65,19 @@ def pre_llm_call(conversation_history=None, user_message=None, **kwargs) -> dict
     sender = task.metadata.get("sender_name", "unknown")
     task_text = task.text
 
-    # Transition: submitted → working
-    queue.transition(task_id, "working")
-    queue.mark_processing(task_id)
+    try:
+        # Transition: submitted → working
+        queue.transition(task_id, "working")
+        queue.mark_processing(task_id)
 
-    # Fire state change hook (SSE + push)
-    _trigger_state_change_hook(task_id, "submitted", "working")
+        # Fire state change hook (SSE + push)
+        _trigger_state_change_hook(task_id, "submitted", "working", context_id=task.context_id)
+    except Exception:
+        # If anything fails before the task is marked as processing,
+        # the remaining drained tasks must be requeued to avoid loss.
+        if len(pending) > 1:
+            queue.requeue_tasks(pending[1:])
+        raise
 
     # Re-queue any additional tasks that weren't processed
     if len(pending) > 1:
@@ -112,7 +124,7 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
         logger.info("[A2A hooks] Completed task %s with response length %d", target_id, len(assistant_response))
 
         # Fire state change hook: working → completed
-        _trigger_state_change_hook(target_id, old_state, "completed")
+        _trigger_state_change_hook(target_id, old_state, "completed", context_id=target_id)
 
         # Persist the exchange
         meta = queue.get_task_metadata(target_id)
@@ -136,7 +148,7 @@ def post_llm_call(conversation_history=None, assistant_response=None, session_id
             old_state = old_status.get("state", "working")
             queue.complete(tid, assistant_response)
             logger.info("[A2A hooks] Completed processing task %s", tid)
-            _trigger_state_change_hook(tid, old_state, "completed")
+            _trigger_state_change_hook(tid, old_state, "completed", context_id=tid)
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +189,11 @@ def _get_hook_push_delivery() -> "PushDelivery":
     return _hook_push_delivery
 
 
-def _trigger_state_change_hook(task_id: str, old_state: str, new_state: str) -> None:
+def _trigger_state_change_hook(task_id: str, old_state: str, new_state: str, context_id: Optional[str] = None) -> None:
     """Fire the TaskStateChangeHook: push SSE events + deliver webhooks."""
     try:
         hook = TaskStateChangeHook()
-        hook.on_state_change(task_id, old_state, new_state)
+        hook.on_state_change(task_id, old_state, new_state, context_id=context_id)
     except Exception as exc:
         logger.debug("[A2A hooks] TaskStateChangeHook error: %s", exc)
 
@@ -189,7 +201,7 @@ def _trigger_state_change_hook(task_id: str, old_state: str, new_state: str) -> 
 def _event_name_for_state(state: str) -> str:
     """Map a task state to its SSE event name."""
     mapping = {
-        "working": "TaskWorking",
+        "working": "TaskStarted",
         "completed": "TaskCompleted",
         "failed": "TaskFailed",
         "canceled": "TaskCanceled",
@@ -216,7 +228,7 @@ class TaskStateChangeHook:
     _subscription_store: "SubscriptionStore | None" = None
     _push_delivery: "PushDelivery | None" = None
 
-    def on_state_change(self, task_id: str, old_state: str, new_state: str) -> None:
+    def on_state_change(self, task_id: str, old_state: str, new_state: str, context_id: Optional[str] = None) -> None:
         """Handle a task state transition.
 
         1. Push an SSE event to all open streams for this task.
@@ -228,6 +240,7 @@ class TaskStateChangeHook:
             task_id=task_id,
             state=new_state,
             event=_event_name_for_state(new_state),
+            context_id=context_id or task_id,
         )
 
         # 1. SSE push — broadcast to all open streams for this task
@@ -272,11 +285,20 @@ class TaskStateChangeHook:
         }
 
         for sub in subs:
-            ok = pusher.deliver_with_retry(sub.url, payload, sub.hmac_key)
+            try:
+                ok = pusher.deliver_with_retry(sub.url, payload, sub.hmac_key)
+            except Exception as exc:
+                ok = False
+                reason = str(exc)
+            else:
+                reason = None
+
             if not ok:
-                logger.debug(
-                    "[A2A hooks] Push delivery failed for subscription %s → %s",
-                    sub.subscription_id, sub.url,
+                logger.warning(
+                    "[A2A hooks] Push delivery failed for task %s, "
+                    "subscription %s → %s%s",
+                    task_id, sub.subscription_id, sub.url,
+                    f": {reason}" if reason else "",
                 )
 
 

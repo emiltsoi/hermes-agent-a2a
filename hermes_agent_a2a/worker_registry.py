@@ -12,6 +12,10 @@ _processes: dict[str, subprocess.Popen] = {}
 
 def register_worker(task_id: str, process: subprocess.Popen) -> None:
     with _lock:
+        # Clean up any zombie entry for this task_id before registering
+        existing = _processes.get(task_id)
+        if existing is not None and existing.poll() is not None:
+            _processes.pop(task_id, None)
         _processes[task_id] = process
 
 

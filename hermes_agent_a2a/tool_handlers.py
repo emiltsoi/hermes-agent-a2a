@@ -75,7 +75,7 @@ def _fleet_agents_root() -> Path:
 
 
 def _is_local_fleet_agent(agent_name: str) -> bool:
-    """Returns True if agent is registered in the local fleet registry."""
+    """Returns True if agent is registered in the local fleet registry with a valid non-loopback URL."""
     fleet_path = Path(os.environ.get("A2A_VAULT_PATH", str(Path.home() / ".hermes/fleet")))
     registry_path = fleet_path / "fleet-registry.yaml"
     if not registry_path.exists():
@@ -84,7 +84,17 @@ def _is_local_fleet_agent(agent_name: str) -> bool:
         import yaml
         with open(registry_path, encoding="utf-8") as f:
             registry = yaml.safe_load(f) or {}
-        return agent_name in registry.get("agents", {})
+        agents = registry.get("agents", {})
+        if agent_name not in agents:
+            return False
+        entry = agents[agent_name]
+        if isinstance(entry, dict):
+            registry_url = entry.get("url", "")
+        else:
+            registry_url = str(entry) if entry else ""
+        if registry_url:
+            _validate_target_url(registry_url, allow_loopback=True)
+        return True
     except Exception:
         return False
 
@@ -1246,7 +1256,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     if target_webhook_url:
         webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (raw_info.get("webhook_secret", "") if isinstance(raw_info, dict) else "")
         if not webhook_secret:
-            return {"error": f"Agent '{agent}' has no webhook_secret configured - HMAC signature required for secure delivery"}
+            return {"error": "Webhook delivery failed"}
         body = json.dumps({"text": padded_message}, sort_keys=True)
         sig = hmac.new(
             webhook_secret.encode(),
@@ -1281,7 +1291,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                 with urllib.request.urlopen(req, timeout=delivery_timeout) as resp:
                     result = json.loads(resp.read().decode())
                     delivery_id = result.get("delivery_id", "unknown")
-                metrics.record_webhook_attempt_and_success()
+                metrics.record_webhook_result(success=True)
                 if attempt > 0:
                     _logger.info("[a2a_send_session_message] Webhook delivery succeeded on attempt %d/%d", attempt + 1, delivery_retries)
                 break
@@ -1291,7 +1301,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                     _logger.warning("[a2a_send_session_message] Webhook delivery attempt %d/%d failed: %s, retrying in %.1fs", attempt + 1, delivery_retries, exc, backoff)
                     time.sleep(backoff)
                 else:
-                    metrics.record_webhook_failure()
+                    metrics.record_webhook_result(success=False)
                     _logger.error("[a2a_send_session_message] Webhook delivery failed after %d attempts: %s", delivery_retries, exc)
                     return {"error": f"Webhook to agent '{agent}' failed after {delivery_retries} attempts: {exc}"}
     else:

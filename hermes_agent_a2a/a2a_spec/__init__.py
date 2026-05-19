@@ -1,5 +1,14 @@
 """Google A2A-shaped helpers plus Hermes metadata extensions."""
 
+from .agent_card import (
+    Provider,
+    Skill,
+    AgentCapabilities,
+    ExtendedAgentCard,
+    build_extended_agent_card,
+    skill_names,
+    validate_skill,
+)
 from .hermes_ext import build_hermes_metadata
 from .tasks import (
     TERMINAL_STATES,
@@ -10,6 +19,19 @@ from .tasks import (
     is_terminal_state,
     parse_json_rpc_error,
     parse_task_result,
+)
+from .push import (
+    AuthenticationInfo,
+    TaskPushNotificationConfig,
+    TaskPushNotificationConfigList,
+    CreateTaskPushNotificationConfigRequest,
+    CreateTaskPushNotificationConfigResponse,
+    GetTaskPushNotificationConfigRequest,
+    GetTaskPushNotificationConfigResponse,
+    ListTaskPushNotificationConfigsRequest,
+    ListTaskPushNotificationConfigsResponse,
+    DeleteTaskPushNotificationConfigRequest,
+    DeleteTaskPushNotificationConfigResponse,
 )
 
 __all__ = [
@@ -22,4 +44,24 @@ __all__ = [
     "is_terminal_state",
     "parse_json_rpc_error",
     "parse_task_result",
+    # Agent Card models (T1-3)
+    "Provider",
+    "Skill",
+    "AgentCapabilities",
+    "ExtendedAgentCard",
+    "build_extended_agent_card",
+    "skill_names",
+    "validate_skill",
+    # Push notification models (T1-1a)
+    "AuthenticationInfo",
+    "TaskPushNotificationConfig",
+    "TaskPushNotificationConfigList",
+    "CreateTaskPushNotificationConfigRequest",
+    "CreateTaskPushNotificationConfigResponse",
+    "GetTaskPushNotificationConfigRequest",
+    "GetTaskPushNotificationConfigResponse",
+    "ListTaskPushNotificationConfigsRequest",
+    "ListTaskPushNotificationConfigsResponse",
+    "DeleteTaskPushNotificationConfigRequest",
+    "DeleteTaskPushNotificationConfigResponse",
 ]

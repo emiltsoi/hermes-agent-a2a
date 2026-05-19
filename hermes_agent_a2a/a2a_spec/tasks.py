@@ -24,8 +24,55 @@ A2A_ERR_PUSH_NOT_SUPPORTED = -38002
 A2A_ERR_INVALID_STATE_TRANSITION = -38003
 A2A_ERR_NON_IDEMPOTENT = -38004
 
-TERMINAL_STATES = {"completed", "failed", "canceled", "rejected"}
-ACTIVE_STATES = {"submitted", "working"}
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class TaskArtifactUpdateEvent:
+    """A task artifact update event.
+
+    Emitted over SSE when a task generates an artifact (partial or final).
+
+    Attributes:
+        context_id: REQUIRED — the context ID for this task.
+        task_id:    REQUIRED — the task this artifact belongs to.
+        artifact:   REQUIRED — the artifact data dict (A2A artifact shape).
+        metadata:   optional — additional event metadata.
+    """
+    context_id: str
+    task_id: str
+    artifact: dict
+    metadata: Optional[dict] = None
+
+    def to_dict(self) -> dict:
+        """Render the event as a plain dict for SSE transport."""
+        return {
+            "kind": "artifact",
+            "contextId": self.context_id,
+            "taskId": self.task_id,
+            "artifact": self.artifact,
+            "metadata": self.metadata or {},
+        }
+
+
+import enum
+
+
+class TaskState(str, enum.Enum):
+    """Canonical task states per Google A2A v1.0 spec."""
+
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    INPUT_REQUIRED = "input_required"
+    AUTH_REQUIRED = "auth_required"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+TERMINAL_STATES = {"completed", "failed", "canceled"}
+ACTIVE_STATES = {"submitted", "working", "input_required", "auth_required"}
 AUTH_STATES = {"auth_required", "authenticated", "rejected"}
 
 
@@ -61,6 +108,7 @@ def build_task_send_payload(
         "params": {
             "id": task_id,
             "message": {
+                "message_id": str(uuid.uuid4()),
                 "role": "user",
                 "parts": [{"type": "text", "text": message}],
                 "metadata": metadata,
@@ -111,11 +159,13 @@ def parse_json_rpc_error(response: dict) -> str:
     return str(rpc_error)
 
 
-def build_error_response(code: int, message: str, data=None) -> dict:
-    """Build a spec-compliant JSON-RPC error response: {code, message, data}."""
-    err = {"code": code, "message": message}
+def build_error_response(code: int, message: str, data=None, id=None) -> dict:
+    """Build a spec-compliant JSON-RPC error response: {jsonrpc, code, message, data, id}."""
+    err = {"jsonrpc": "2.0", "code": code, "message": message}
     if data is not None:
         err["data"] = data
+    if id is not None:
+        err["id"] = id
     return err
 
 
