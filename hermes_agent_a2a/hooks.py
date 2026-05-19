@@ -11,12 +11,9 @@ Wave 2 additions:
 from __future__ import annotations
 
 import logging
-import os
 import re
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from . import server as _server_module
 from .persistence import save_exchange
 
 if TYPE_CHECKING:

@@ -3,7 +3,6 @@
 from dataclasses import dataclass, asdict
 from typing import Optional, List
 
-from .hermes_ext import build_hermes_metadata
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
-import os
 import re
 import socket
 import time
@@ -231,6 +230,7 @@ def is_safe_url(url: str) -> bool:
     # For hostnames (not raw IPs), do a DNS lookup and check the resolved IP
     if hostname and not hostname[0].isdigit():
         try:
+            socket.setdefaulttimeout(5.0)
             resolved = socket.gethostbyname(hostname)
             if _is_private_ip(resolved):
                 return False

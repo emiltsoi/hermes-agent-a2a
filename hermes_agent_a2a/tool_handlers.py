@@ -61,7 +61,7 @@ def _vault():
 
 
 def _resolve_agent_by_name(name: str):
-    from .identity import resolve_agent as _resolve_agent_fn, get_raw_agent_identity
+    from .identity import resolve_agent as _resolve_agent_fn
     return _resolve_agent_fn(name)
 
 
@@ -154,10 +154,10 @@ def _validate_agent_webhook_config(agent_info: dict) -> tuple[bool, str]:
     webhook_secret = _transport_auth_value(hermes_webhook, "secret")
     
     if not webhook_url:
-        return False, f"Agent has no hermes_webhook.url configured"
+        return False, "Agent has no hermes_webhook.url configured"
     
     if not webhook_secret:
-        return False, f"Agent has no hermes_webhook.secret configured - HMAC signature required"
+        return False, "Agent has no hermes_webhook.secret configured - HMAC signature required"
     
     return True, ""
 
@@ -1252,7 +1252,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
             target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=_is_local_fleet_agent(agent))
         except ValueError as e:
             return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
-    import hashlib, hmac
+    import hashlib
+    import hmac
     delivery_id = None
     if target_webhook_url:
         webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (raw_info.get("webhook_secret", "") if isinstance(raw_info, dict) else "")

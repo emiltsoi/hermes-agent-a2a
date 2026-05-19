@@ -24,8 +24,7 @@ A2A_ERR_PUSH_NOT_SUPPORTED = -38002
 A2A_ERR_INVALID_STATE_TRANSITION = -38003
 A2A_ERR_NON_IDEMPOTENT = -38004
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass

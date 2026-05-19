@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import time
 from threading import Lock
 
 _lock = Lock()

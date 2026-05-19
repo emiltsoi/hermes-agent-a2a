@@ -35,7 +35,6 @@ from .a2a_spec.push import (
     ListTaskPushNotificationConfigsResponse,
     DeleteTaskPushNotificationConfigRequest,
     DeleteTaskPushNotificationConfigResponse,
-    TaskPushNotificationConfig,
     AuthenticationInfo,
 )
 from .push_delivery import (
@@ -763,11 +762,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 )
                 return False
             remote = self.client_address[0]
-            allowed = remote in ("127.0.0.1", "::1")
+            allowed = remote in ("127.0.0.1", "::1") and self.server.require_auth
             if allowed:
                 logger.warning(
-                    "[A2A] Allowing unauthenticated localhost request from %s — set A2A_AUTH_TOKEN; "
-                    "localhost is not isolated in containers/shared namespaces",
+                    "[A2A] Allowing unauthenticated localhost request from %s — A2A_REQUIRE_AUTH is set; "
+                    "note: localhost is not isolated in containers/shared namespaces",
                     remote,
                 )
             return allowed
@@ -975,7 +974,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         client disconnects.
         """
         from .sse_handler import get_sse_streamer
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state, build_error_response, A2A_ERR_INTERNAL
+        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state, build_error_response
 
         tid = params.get("taskId", "")
         if not tid:
@@ -1994,7 +1993,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         Uses GetTaskPushNotificationConfigRequest + get_push_config from push_delivery.
         X-HMAC-Key optional; if provided must be valid.
         """
-        if not self._check_hmac_push(required=False):
+        if not self._check_hmac_push(required=True):
             return
         from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
 
