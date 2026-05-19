@@ -71,7 +71,7 @@ def build_extended_agent_card(overrides: Optional[dict] = None) -> dict:
     """
     card = {
         "name": "hermes-agent",
-        "description": "A self-improving AI agent powered by Hermes",
+        "description": "Hermes fleet agent with A2A HTTP/JSON-RPC protocol support — exposes A2A server, HMAC auth, push notifications, SSE streaming, and Telegram session routing.",
         "url": None,
         "version": None,
         "documentationUrl": None,

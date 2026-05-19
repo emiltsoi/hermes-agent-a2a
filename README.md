@@ -1,6 +1,6 @@
 # Hermes Agent A2A
 
-`hermes-agent-a2a` is the A2A toolset plugin for Hermes Agent. It gives Hermes profiles a local A2A HTTP server plus outbound tools for Hermes fleet agents and external A2A-compatible agents.
+`hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, Telegram session routing with sender echo, and fleet metrics — all Hermes-specific, not fleet-agnostic.
 
 ## Capabilities
 
