@@ -496,7 +496,7 @@ def _register_external_agent_identity(
 # ----------------------------------------------------------------------
 
 
-def _http_request(method: str, url: str, json_body: dict = None, headers: dict = None, timeout: int = _DEFAULT_TIMEOUT) -> dict:
+def _http_request(method: str, url: str, json_body: dict = None, headers: dict = None, timeout: int = _DEFAULT_TIMEOUT, a2a_version: str | None = None) -> dict:
     """Synchronous HTTP request using urllib (no asyncio dependency)."""
     import urllib.request
     import urllib.error
@@ -504,6 +504,8 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
     req_headers = {"Content-Type": "application/json", "User-Agent": "Hermes-A2A/3.0"}
     if headers:
         req_headers.update(headers)
+    if a2a_version:
+        req_headers["A2A-Version"] = a2a_version
 
     data = json.dumps(json_body).encode() if json_body else None
     req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
@@ -879,7 +881,7 @@ def _handle_call_mode3(
     headers = _auth_headers(resolved_auth)
 
     try:
-        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout)
+        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout, a2a_version="1.0")
     except Exception as exc:
         return {"error": f"Mode 3 HTTP error: {exc}"}
 
@@ -984,7 +986,7 @@ def handle_send_protocol_task(
     rpc_result = {}
 
     try:
-        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout)
+        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout, a2a_version="1.0")
     except ConnectionError:
         error_msg = f"Cannot connect to {target_url}"
     except TimeoutError:
@@ -1007,7 +1009,7 @@ def handle_send_protocol_task(
                 for attempt in range(poll_attempts):
                     time.sleep(max(0, poll_interval))
                     try:
-                        poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers, timeout=timeout)
+                        poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers, timeout=timeout, a2a_version="1.0")
                         if parse_json_rpc_error(poll_result):
                             continue
                         poll_inner = poll_result.get("result", {}) or {}
@@ -1114,6 +1116,7 @@ def handle_cancel_protocol_task(
             json_body=build_task_cancel_payload(task_id),
             headers=_auth_headers(resolved_auth),
             timeout=int(timeout or _DEFAULT_TIMEOUT),
+            a2a_version="1.0",
         )
     except Exception as exc:
         return {"error": f"Cancel failed: {exc}", "task_id": task_id, "local_canceled": local_canceled}

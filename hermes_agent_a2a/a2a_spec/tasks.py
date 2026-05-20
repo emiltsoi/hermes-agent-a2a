@@ -103,7 +103,7 @@ def build_task_send_payload(
     payload = {
         "jsonrpc": "2.0",
         "id": request_id or str(uuid.uuid4()),
-        "method": "tasks/send",
+        "method": "SendMessage",
         "params": {
             "id": task_id,
             "message": {

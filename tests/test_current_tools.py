@@ -271,7 +271,7 @@ def test_local_worker_returns_hermes_local_subprocess_envelope(tmp_path, monkeyp
     assert result["hermes"]["route"] == "worker"
     assert result["hermes"]["execution"] == "local_subprocess"
     assert result["hermes"]["isolation"] == "local_profile"
-    assert result["a2a_envelope"]["method"] == "tasks/send"
+    assert result["a2a_envelope"]["method"] == "SendMessage"
 
 
 def test_a2a_spec_builds_protocol_task_payload_with_hermes_metadata():
@@ -285,7 +285,7 @@ def test_a2a_spec_builds_protocol_task_payload_with_hermes_metadata():
     )
 
     assert payload["jsonrpc"] == "2.0"
-    assert payload["method"] == "tasks/send"
+    assert payload["method"] == "SendMessage"
     assert payload["id"] == "rpc-1"
     assert payload["params"]["message"]["metadata"]["skill"] == "summarize"
     assert payload["params"]["message"]["metadata"]["hermes"]["route"] == "protocol"
@@ -354,7 +354,7 @@ def test_session_message_returns_a2a_shaped_delivery_ack(monkeypatch):
     assert result["reply_expected"] is False
     assert result["hermes"]["route"] == "session"
     assert result["hermes"]["delivery"] == "one_way"
-    assert result["a2a_envelope"]["method"] == "tasks/send"
+    assert result["a2a_envelope"]["method"] == "SendMessage"
     assert result["a2a_envelope"]["params"]["message"]["metadata"]["expected_action"] == "acknowledge"
 
 
@@ -1358,7 +1358,7 @@ def test_call_a2a_direct_builds_correct_json_rpc_payload():
         # Verify JSON-RPC 2.0 payload structure (spec format)
         body = json.loads(req.data.decode())
         assert body["jsonrpc"] == "2.0"
-        assert body["method"] == "tasks/send"
+        assert body["method"] == "SendMessage"
         assert body["params"]["id"] == "task-123"
         assert body["params"]["message"]["role"] == "user"
         assert body["params"]["message"]["parts"][0]["type"] == "text"
@@ -1642,7 +1642,7 @@ def test_2d_cta_behavioral():
     )
     
     # Verify envelope structure is correct (spec format)
-    assert envelope["method"] == "tasks/send"
+    assert envelope["method"] == "SendMessage"
     assert envelope["params"]["id"] == "test-task"
     assert envelope["params"]["message"]["role"] == "user"
     assert envelope["params"]["message"]["parts"][0]["type"] == "text"
