@@ -1350,14 +1350,14 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     }
 
 
-def handle_get_metrics(task_id: Optional[str] = None, **kwargs) -> dict:
+def handle_get_metrics(**kwargs) -> dict:
     """Get current A2A plugin metrics.
 
-    Args:
-        task_id: Optional task correlation ID (passed through, not used for filtering).
-        user_task: Optional user task label (passed through, not used for filtering).
+    Accepts arbitrary kwargs from executor dispatch to avoid TypeError
+    on schema-param mismatches. task_id and user_task are not used.
     """
     from .runtime_state import get_runtime_state as get_state
+
     return get_state().get_metrics().get_metrics()
 
 
