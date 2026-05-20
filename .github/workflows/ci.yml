@@ -18,5 +18,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - run: python -c "import jwt; import httpx"
       - run: python -m py_compile hermes_agent_a2a/*.py
       - run: python -m pytest tests/ -v --ignore=tests/smoke/
