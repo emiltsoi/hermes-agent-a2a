@@ -201,21 +201,20 @@ _config_store_lock = threading.Lock()
 
 def create_push_config(
     task_id: str,
-    push_transport_type: str,
-    endpoint: str,
+    url: str,
     authentication: Optional[AuthenticationInfo] = None,
     metadata: Optional[dict] = None,
 ) -> TaskPushNotificationConfig:
     """Create a push notification config for a task.
 
+    Per a2a.proto:464-478 TaskPushNotificationConfig.
     Generates a unique config_id using uuid4.
     """
     config_id = str(uuid.uuid4())
     cfg = TaskPushNotificationConfig(
         id=config_id,
         task_id=task_id,
-        push_transport_type=push_transport_type,
-        endpoint=endpoint,
+        url=url,
         authentication=authentication,
         metadata=metadata,
     )
@@ -277,7 +276,7 @@ def deliver_push_notification(
         )
         return False
 
-    safe, reason = validate_webhook_endpoint(cfg.endpoint)
+    safe, reason = validate_webhook_endpoint(cfg.url)
     if not safe:
         logger.warning(
             "[PushDelivery] SSRF blocked for push config %s: %s",
@@ -287,27 +286,27 @@ def deliver_push_notification(
 
     try:
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(cfg.endpoint, json=payload)
+            resp = client.post(cfg.url, json=payload)
             if 200 <= resp.status_code < 300:
                 return True
             logger.warning(
                 "[PushDelivery] Non-2xx delivery to %s: status=%d",
-                cfg.endpoint, resp.status_code,
+                cfg.url, resp.status_code,
             )
             return False
     except httpx.TimeoutException:
         logger.warning(
-            "[PushDelivery] Timeout delivering to %s", cfg.endpoint,
+            "[PushDelivery] Timeout delivering to %s", cfg.url,
         )
         return False
     except httpx.ConnectError as e:
         logger.warning(
-            "[PushDelivery] Connection error delivering to %s: %s", cfg.endpoint, e,
+            "[PushDelivery] Connection error delivering to %s: %s", cfg.url, e,
         )
         return False
     except Exception as e:
         logger.warning(
-            "[PushDelivery] Unexpected error delivering to %s: %s", cfg.endpoint, e,
+            "[PushDelivery] Unexpected error delivering to %s: %s", cfg.url, e,
         )
         return False
 
@@ -322,8 +321,15 @@ def deliver_artifact_push(
 ) -> bool:
     """Deliver a TaskArtifactUpdateEvent as a push notification.
 
-    Builds a payload matching the TaskArtifactUpdateEvent SSE format and
-    delivers it to the configured push webhook endpoint.
+    Per a2a.proto:775-787, StreamResponse payload format:
+      oneof payload {
+        Task task = 1;
+        Message message = 2;
+        TaskStatusUpdateEvent status_update = 3;
+        TaskArtifactUpdateEvent artifact_update = 4;
+      }
+
+    We deliver the artifact_update discriminator directly.
 
     Args:
         task_id:    The task that generated the artifact.
@@ -336,12 +342,16 @@ def deliver_artifact_push(
     Returns:
         True on a 2xx response, False on any failure.
     """
+    # Spec-compliant StreamResponse payload with artifact_update discriminator
     payload = {
-        "kind": "artifact",
-        "contextId": context_id,
-        "taskId": task_id,
-        "artifact": artifact,
-        "metadata": metadata or {},
+        "artifact_update": {
+            "task_id": task_id,
+            "context_id": context_id,
+            "artifact": artifact,
+            "append": False,
+            "last_chunk": True,
+            "metadata": metadata or {},
+        }
     }
     return deliver_push_notification(task_id, config_id, payload, timeout=timeout)
 

@@ -419,8 +419,9 @@ class TestPushDeliverySSRF:
         # Create a config with a private IP
         cfg = create_push_config(
             task_id="ssrf-task",
-            push_transport_type="webhook",
-            endpoint="https://192.168.1.1/webhook",
+            url="https://192.168.1.1/webhook",
+            authentication=None,
+            metadata=None,
         )
 
         result = deliver_push_notification(
@@ -436,8 +437,9 @@ class TestPushDeliverySSRF:
 
         cfg = create_push_config(
             task_id="loopback-task",
-            push_transport_type="webhook",
-            endpoint="https://127.0.0.1/webhook",
+            url="https://127.0.0.1/webhook",
+            authentication=None,
+            metadata=None,
         )
 
         result = deliver_push_notification(
@@ -452,8 +454,9 @@ class TestPushDeliverySSRF:
 
         cfg = create_push_config(
             task_id="meta-task",
-            push_transport_type="webhook",
-            endpoint="https://169.254.169.254/latest/meta-data/",
+            url="https://169.254.169.254/latest/meta-data/",
+            authentication=None,
+            metadata=None,
         )
 
         result = deliver_push_notification(

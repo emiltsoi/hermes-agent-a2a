@@ -23,13 +23,14 @@ class TestTaskStateEnum:
             "completed",
             "failed",
             "canceled",
+            "rejected",
         ],
     )
     def test_enum_has_spec_canonical_state(self, expected):
         assert expected in [s.value for s in TaskState]
 
     def test_enum_member_count(self):
-        assert len(TaskState) == 7
+        assert len(TaskState) == 8
 
     def test_enum_values_are_lowercase_strings(self):
         for member in TaskState:
@@ -40,9 +41,9 @@ class TestTaskStateEnum:
         """'authenticated' is an auth sub-state, not a canonical TaskState."""
         assert "authenticated" not in [s.value for s in TaskState]
 
-    def test_rejected_not_a_task_state(self):
-        """'rejected' is an auth sub-state, not a canonical TaskState."""
-        assert "rejected" not in [s.value for s in TaskState]
+    def test_rejected_is_a_task_state(self):
+        """'rejected' is a canonical TaskState (terminal auth state)."""
+        assert "rejected" in [s.value for s in TaskState]
 
 
 class TestStateGroupings:
@@ -52,10 +53,10 @@ class TestStateGroupings:
         assert ACTIVE_STATES == {"submitted", "working", "input_required", "auth_required"}
 
     def test_terminal_states(self):
-        assert TERMINAL_STATES == {"completed", "failed", "canceled"}
+        assert TERMINAL_STATES == {"completed", "failed", "canceled", "rejected"}
 
     def test_auth_states(self):
-        assert AUTH_STATES == {"auth_required", "authenticated", "rejected"}
+        assert AUTH_STATES == {"auth_required", "rejected"}
 
     def test_active_and_terminal_are_disjoint(self):
         assert ACTIVE_STATES.isdisjoint(TERMINAL_STATES)
@@ -64,10 +65,6 @@ class TestStateGroupings:
         assert "auth_required" in ACTIVE_STATES
         assert "auth_required" in AUTH_STATES
 
-    def test_rejected_in_auth_not_terminal(self):
+    def test_rejected_in_auth_and_terminal(self):
         assert "rejected" in AUTH_STATES
-        assert "rejected" not in TERMINAL_STATES
-
-    def test_authenticated_in_auth_not_active(self):
-        assert "authenticated" in AUTH_STATES
-        assert "authenticated" not in ACTIVE_STATES
+        assert "rejected" in TERMINAL_STATES

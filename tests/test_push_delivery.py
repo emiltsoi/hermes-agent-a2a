@@ -18,50 +18,49 @@ from hermes_agent_a2a.a2a_spec.push import (
 # ---------------------------------------------------------------------------
 
 class TestCreatePushConfig:
-    """create_push_config(task_id, push_transport_type, endpoint, ...) → TaskPushNotificationConfig."""
+    """create_push_config(task_id, url, authentication, metadata) → TaskPushNotificationConfig."""
 
     def test_create_returns_config(self):
         """create_push_config must return a TaskPushNotificationConfig."""
         from hermes_agent_a2a.push_delivery import create_push_config
-        cfg = create_push_config("task-1", "webhook", "https://example.com/hook")
+        cfg = create_push_config("task-1", "https://example.com/hook", None, None)
         assert isinstance(cfg, TaskPushNotificationConfig)
 
     def test_create_sets_required_fields(self):
-        """Created config must have correct task_id, push_transport_type, endpoint."""
+        """Created config must have correct task_id and url."""
         from hermes_agent_a2a.push_delivery import create_push_config
-        cfg = create_push_config("t-x", "webhook", "https://x.com/h")
+        cfg = create_push_config("t-x", "https://x.com/h", None, None)
         assert cfg.task_id == "t-x"
-        assert cfg.push_transport_type == "webhook"
-        assert cfg.endpoint == "https://x.com/h"
+        assert cfg.url == "https://x.com/h"
 
     def test_create_generates_id(self):
         """create_push_config must generate a config_id."""
         from hermes_agent_a2a.push_delivery import create_push_config
-        cfg = create_push_config("t-2", "gcm", "https://gcm.example.com")
+        cfg = create_push_config("t-2", "https://gcm.example.com", None, None)
         assert cfg.id, "config must have a non-empty id"
         assert isinstance(cfg.id, str)
 
     def test_create_with_authentication(self):
         """authentication dict is stored on the config."""
         from hermes_agent_a2a.push_delivery import create_push_config
-        auth = AuthenticationInfo(auth_type="bearer", auth_code="tok123")
-        cfg = create_push_config("t-3", "webhook", "https://x.com/h", authentication=auth)
+        auth = AuthenticationInfo(scheme="bearer", credentials="tok123")
+        cfg = create_push_config("t-3", "https://x.com/h", authentication=auth, metadata=None)
         assert cfg.authentication is not None
-        assert cfg.authentication.auth_type == "bearer"
-        assert cfg.authentication.auth_code == "tok123"
+        assert cfg.authentication.scheme == "bearer"
+        assert cfg.authentication.credentials == "tok123"
 
     def test_create_with_metadata(self):
         """metadata dict is stored on the config."""
         from hermes_agent_a2a.push_delivery import create_push_config
         meta = {"env": "prod"}
-        cfg = create_push_config("t-4", "webhook", "https://x.com/h", metadata=meta)
+        cfg = create_push_config("t-4", "https://x.com/h", None, metadata=meta)
         assert cfg.metadata == {"env": "prod"}
 
     def test_create_idempotent_per_task(self):
         """Two creates for same task_id return configs with distinct ids."""
         from hermes_agent_a2a.push_delivery import create_push_config
-        c1 = create_push_config("t-5", "webhook", "https://c1.com")
-        c2 = create_push_config("t-5", "webhook", "https://c2.com")
+        c1 = create_push_config("t-5", "https://c1.com", None, None)
+        c2 = create_push_config("t-5", "https://c2.com", None, None)
         assert c1.id != c2.id, "Each create must generate a unique config id"
 
 
@@ -71,17 +70,17 @@ class TestGetPushConfig:
     def test_get_returns_config(self):
         """get_push_config must return the registered config."""
         from hermes_agent_a2a.push_delivery import create_push_config, get_push_config
-        created = create_push_config("t-get-1", "webhook", "https://get.com/h")
+        created = create_push_config("t-get-1", "https://get.com/h", None, None)
         retrieved = get_push_config("t-get-1", created.id)
         assert retrieved is not None
         assert retrieved.id == created.id
         assert retrieved.task_id == "t-get-1"
-        assert retrieved.endpoint == "https://get.com/h"
+        assert retrieved.url == "https://get.com/h"
 
     def test_get_returns_none_for_unknown_config_id(self):
         """Unknown config_id must return None."""
         from hermes_agent_a2a.push_delivery import create_push_config, get_push_config
-        create_push_config("t-get-2", "webhook", "https://x.com/h")
+        create_push_config("t-get-2", "https://x.com/h", None, None)
         result = get_push_config("t-get-2", "nonexistent-config-id")
         assert result is None
 
@@ -98,8 +97,8 @@ class TestListPushConfigs:
     def test_list_returns_all_configs_for_task(self):
         """list_push_configs returns all configs registered for the task_id."""
         from hermes_agent_a2a.push_delivery import create_push_config, list_push_configs
-        c1 = create_push_config("t-list-1", "webhook", "https://l1.com")
-        c2 = create_push_config("t-list-1", "webhook", "https://l2.com")
+        c1 = create_push_config("t-list-1", "https://l1.com", None, None)
+        c2 = create_push_config("t-list-1", "https://l2.com", None, None)
         configs = list_push_configs("t-list-1")
         assert len(configs) == 2
         ids = {c.id for c in configs}
@@ -118,14 +117,14 @@ class TestDeletePushConfig:
     def test_delete_returns_config_id(self):
         """delete_push_config must return the deleted config_id."""
         from hermes_agent_a2a.push_delivery import create_push_config, delete_push_config
-        created = create_push_config("t-del-1", "webhook", "https://del.com/h")
+        created = create_push_config("t-del-1", "https://del.com/h", None, None)
         result = delete_push_config("t-del-1", created.id)
         assert result == created.id
 
     def test_delete_removes_config(self):
         """Deleted config is no longer retrievable."""
         from hermes_agent_a2a.push_delivery import create_push_config, get_push_config, delete_push_config
-        created = create_push_config("t-del-2", "webhook", "https://del2.com/h")
+        created = create_push_config("t-del-2", "https://del2.com/h", None, None)
         delete_push_config("t-del-2", created.id)
         result = get_push_config("t-del-2", created.id)
         assert result is None
@@ -133,7 +132,7 @@ class TestDeletePushConfig:
     def test_delete_returns_config_id_string(self):
         """delete_push_config must return a string config_id."""
         from hermes_agent_a2a.push_delivery import create_push_config, delete_push_config
-        created = create_push_config("t-del-3", "webhook", "https://del3.com/h")
+        created = create_push_config("t-del-3", "https://del3.com/h", None, None)
         result = delete_push_config("t-del-3", created.id)
         assert isinstance(result, str)
         assert result == created.id
@@ -152,11 +151,11 @@ class TestDeletePushConfig:
 class TestDeliverPushNotification:
     """deliver_push_notification(task_id, config_id, payload) → bool."""
 
-    def test_deliver_posts_to_endpoint(self):
-        """deliver_push_notification must POST payload to the config's endpoint."""
+    def test_deliver_posts_to_url(self):
+        """deliver_push_notification must POST payload to the config's url."""
         from hermes_agent_a2a.push_delivery import create_push_config, deliver_push_notification
 
-        created = create_push_config("t-dlv-1", "webhook", "https://dlv.example.com/hook")
+        created = create_push_config("t-dlv-1", "https://dlv.example.com/hook", None, None)
         payload = {"event": "task.completed", "task_id": "t-dlv-1"}
 
         # Patch validate_webhook_endpoint at the location where push_delivery looks it up
@@ -181,7 +180,7 @@ class TestDeliverPushNotification:
         """deliver_push_notification returns True on 2xx response."""
         from hermes_agent_a2a.push_delivery import create_push_config, deliver_push_notification
 
-        created = create_push_config("t-dlv-2", "webhook", "https://dlv2.example.com/h")
+        created = create_push_config("t-dlv-2", "https://dlv2.example.com/h", None, None)
         with patch("hermes_agent_a2a.push_delivery.validate_webhook_endpoint", return_value=(True, "")):
             with patch("httpx.Client") as mock_client_cls:
                 mock_resp = MagicMock()
@@ -197,7 +196,7 @@ class TestDeliverPushNotification:
         """deliver_push_notification returns False on non-2xx response."""
         from hermes_agent_a2a.push_delivery import create_push_config, deliver_push_notification
 
-        created = create_push_config("t-dlv-3", "webhook", "https://dlv3.example.com/h")
+        created = create_push_config("t-dlv-3", "https://dlv3.example.com/h", None, None)
         with patch("httpx.Client") as mock_client_cls:
             mock_resp = MagicMock()
             mock_resp.status_code = 500
@@ -213,7 +212,7 @@ class TestDeliverPushNotification:
         import httpx
         from hermes_agent_a2a.push_delivery import create_push_config, deliver_push_notification
 
-        created = create_push_config("t-dlv-4", "webhook", "https://dlv4.example.com/h")
+        created = create_push_config("t-dlv-4", "https://dlv4.example.com/h", None, None)
         with patch("httpx.Client") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.post.side_effect = httpx.TimeoutException("timed out")
@@ -227,7 +226,7 @@ class TestDeliverPushNotification:
         import httpx
         from hermes_agent_a2a.push_delivery import create_push_config, deliver_push_notification
 
-        created = create_push_config("t-dlv-5", "webhook", "https://dlv5.example.com/h")
+        created = create_push_config("t-dlv-5", "https://dlv5.example.com/h", None, None)
         with patch("httpx.Client") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.post.side_effect = httpx.ConnectError("connection refused")

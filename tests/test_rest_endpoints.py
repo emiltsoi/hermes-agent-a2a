@@ -100,7 +100,8 @@ def _rest_delete(port, path, auth_token="test-secret"):
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode()), resp.status
+            body = resp.read().decode()
+            return json.loads(body) if body else {}, resp.status
     except urllib.error.HTTPError as e:
         return json.loads(e.read().decode()), e.code
 
@@ -207,15 +208,15 @@ class TestListTasks:
         body, status = _rest_get(port, "/tasks")
         assert status == 200, f"Expected 200, got {status}: {body}"
 
-    def test_list_tasks_returns_array(self, fresh_server):
-        """GET /tasks must return an array (or items field) of tasks."""
+    def test_list_tasks_returns_tasks_array(self, fresh_server):
+        """GET /tasks must return an object with tasks array field."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        # Accept either a bare array or an object with items/data/result field
-        items = body if isinstance(body, list) else body.get("items") or body.get("data") or body.get("result", [])
-        assert isinstance(items, list), f"Expected list of tasks, got: {body}"
+        # Response must have tasks, next_page_token, page_size, total_size
+        assert "tasks" in body, f"Response must have 'tasks' field: {body}"
+        assert isinstance(body["tasks"], list), f"'tasks' must be a list: {body}"
 
     def test_list_tasks_includes_created_tasks(self, fresh_server):
         """GET /tasks must include tasks that were created."""
@@ -225,20 +226,29 @@ class TestListTasks:
         _rpc_request(port, _make_task_send_body(task_id, "hello"))
 
         body, status = _rest_get(port, "/tasks")
-        items = body if isinstance(body, list) else body.get("items") or body.get("data") or body.get("result", [])
-        task_ids = [t.get("id") for t in items]
+        task_ids = [t.get("id") for t in body.get("tasks", [])]
         assert task_id in task_ids, f"Created task {task_id} must appear in task list: {task_ids}"
 
     def test_list_tasks_pagination_params(self, fresh_server):
-        """GET /tasks must accept optional pageSize / marker params without error."""
+        """GET /tasks must accept optional page_size param without error."""
         server, port = fresh_server
 
         # These should not cause 400 errors
-        body, status = _rest_get(port, "/tasks?pageSize=10")
-        assert status == 200, f"pageSize param must not cause error: {body}"
+        body, status = _rest_get(port, "/tasks?page_size=10")
+        assert status == 200, f"page_size param must not cause error: {body}"
 
-        body2, status2 = _rest_get(port, "/tasks?pageSize=5&marker=abc")
-        assert status2 == 200, f"pageSize+marker params must not cause error: {body2}"
+        body2, status2 = _rest_get(port, "/tasks?page_size=5")
+        assert status2 == 200, f"page_size param must not cause error: {body2}"
+
+    def test_list_tasks_returns_pagination_fields(self, fresh_server):
+        """GET /tasks must return next_page_token, page_size, total_size fields."""
+        server, port = fresh_server
+
+        body, status = _rest_get(port, "/tasks")
+        assert status == 200
+        assert "next_page_token" in body, f"Response must have 'next_page_token': {body}"
+        assert "page_size" in body, f"Response must have 'page_size': {body}"
+        assert "total_size" in body, f"Response must have 'total_size': {body}"
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +423,7 @@ class TestSendStreamingMessage:
             },
         }).encode()
         req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/message/stream",
+            f"http://127.0.0.1:{port}/message:stream",
             data=data,
             headers=hdrs,
             method="POST",
@@ -458,8 +468,8 @@ class TestPushNotificationConfigs:
         )
         assert status == 201, f"Expected 201, got {status}: {body}"
 
-    def test_create_push_notification_config_returns_subscription_id(self, fresh_server):
-        """POST must return a subscriptionId on success."""
+    def test_create_push_notification_config_returns_config_id(self, fresh_server):
+        """POST must return a configId on success."""
         server, port = fresh_server
         task_id = self._seed_task(port)
 
@@ -472,9 +482,9 @@ class TestPushNotificationConfigs:
             },
         )
         assert status == 201
-        # Support both old "subscriptionId" and new "configId" key
-        config_id = body.get("subscriptionId") or (body.get("config") or {}).get("id") or body.get("configId")
-        assert config_id, f"Must return subscriptionId or configId: {body}"
+        # Must return configId (spec-compliant)
+        config_id = body.get("configId")
+        assert config_id, f"Must return configId: {body}"
 
     def test_create_push_notification_config_returns_404_for_unknown_task(self, fresh_server):
         """POST /tasks/{id}/pushNotificationConfigs must return 404 for unknown task."""
@@ -536,8 +546,8 @@ class TestPushNotificationConfigs:
         items = body if isinstance(body, list) else body.get("items") or body.get("configs", [])
         assert isinstance(items, list), f"Expected list, got: {body}"
 
-    def test_delete_push_notification_config_returns_200(self, fresh_server):
-        """DELETE /tasks/{id}/pushNotificationConfigs/{config_id} must return 200."""
+    def test_delete_push_notification_config_returns_204(self, fresh_server):
+        """DELETE /tasks/{id}/pushNotificationConfigs/{config_id} must return 204."""
         server, port = fresh_server
         task_id = self._seed_task(port)
 
@@ -557,7 +567,7 @@ class TestPushNotificationConfigs:
         del_body, del_status = _rest_delete(
             port, f"/tasks/{task_id}/pushNotificationConfigs/{sub_id}"
         )
-        assert del_status == 200, f"Expected 200 on delete, got {del_status}: {del_body}"
+        assert del_status == 204, f"Expected 204 on delete, got {del_status}: {del_body}"
 
     def test_delete_push_notification_config_returns_404_for_unknown(self, fresh_server):
         """DELETE for unknown config_id must return 404."""

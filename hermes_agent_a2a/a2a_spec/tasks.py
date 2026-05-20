@@ -1,4 +1,4 @@
-"""Google A2A-shaped task payload builders and result parsers.
+"""Google A2A task payload builders and result parsers.
 
 Google A2A v1.0 error codes:
   -32700  Parse error
@@ -11,8 +11,11 @@ Google A2A v1.0 error codes:
   -38004  Non-idempotent task
 """
 
+import enum
 import uuid
 from typing import Optional
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 # A2A-spec-compliant error codes
 A2A_ERR_PARSE = -32700
@@ -24,14 +27,17 @@ A2A_ERR_PUSH_NOT_SUPPORTED = -38002
 A2A_ERR_INVALID_STATE_TRANSITION = -38003
 A2A_ERR_NON_IDEMPOTENT = -38004
 
-from dataclasses import dataclass
+
+# ---------------------------------------------------------------------------
+# Event models
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class TaskArtifactUpdateEvent:
-    """A task artifact update event.
+    """TaskArtifactUpdateEvent per a2a.proto:775-787.
 
-    Emitted over SSE when a task generates an artifact (partial or final).
+    Used in StreamResponse oneof payload with artifact_update discriminator.
 
     Attributes:
         context_id: REQUIRED — the context ID for this task.
@@ -45,22 +51,50 @@ class TaskArtifactUpdateEvent:
     metadata: Optional[dict] = None
 
     def to_dict(self) -> dict:
-        """Render the event as a plain dict for SSE transport."""
+        """Render as spec-compliant StreamResponse artifact_update discriminator."""
         return {
-            "kind": "artifact",
-            "contextId": self.context_id,
-            "taskId": self.task_id,
-            "artifact": self.artifact,
-            "metadata": self.metadata or {},
+            "artifact_update": {
+                "task_id": self.task_id,
+                "context_id": self.context_id,
+                "artifact": self.artifact,
+                "append": False,
+                "last_chunk": True,
+                "metadata": self.metadata or {},
+            }
         }
 
 
-import enum
+# ---------------------------------------------------------------------------
+# Enums — spec-compliant per a2a.proto
+# ---------------------------------------------------------------------------
 
 
-class TaskState(str, enum.Enum):
-    """Canonical task states per Google A2A v1.0 spec."""
+class Role(int):
+    """Role enum per a2a.proto:245-252.
 
+    Spec values:
+      ROLE_UNSPECIFIED = 0
+      ROLE_USER = 1       (client to server)
+      ROLE_AGENT = 2     (server to client)
+    """
+    ROLE_UNSPECIFIED = 0
+    ROLE_USER = 1
+    ROLE_AGENT = 2
+
+
+class TaskState(enum.Enum):
+    """Canonical task states per Google A2A v1.0 spec (a2a.proto:187-208).
+
+    Spec integer values:
+      TASK_STATE_SUBMITTED = 1
+      WORKING = 2
+      COMPLETED = 3
+      FAILED = 4
+      CANCELED = 5
+      INPUT_REQUIRED = 6
+      REJECTED = 7
+      AUTH_REQUIRED = 8
+    """
     SUBMITTED = "submitted"
     WORKING = "working"
     INPUT_REQUIRED = "input_required"
@@ -68,15 +102,26 @@ class TaskState(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
+    REJECTED = "rejected"
 
 
-TERMINAL_STATES = {"completed", "failed", "canceled"}
+TERMINAL_STATES = {"completed", "failed", "canceled", "rejected"}
 ACTIVE_STATES = {"submitted", "working", "input_required", "auth_required"}
-AUTH_STATES = {"auth_required", "authenticated", "rejected"}
+AUTH_STATES = {"auth_required", "rejected"}
 
 
 def is_terminal_state(state: str) -> bool:
     return str(state or "").lower() in TERMINAL_STATES
+
+
+def _utc_timestamp() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------------------------------------------------------------------------
+# Payload builders
+# ---------------------------------------------------------------------------
 
 
 def build_task_send_payload(
@@ -89,6 +134,11 @@ def build_task_send_payload(
     hermes: Optional[dict] = None,
     request_id: Optional[str] = None,
 ) -> dict:
+    """Build a SendMessage JSON-RPC payload.
+
+    Per spec: Message.role is Role.ROLE_USER (1).
+    Per spec: Part uses oneof pattern {"text": "..."}.
+    """
     metadata = {
         "intent": intent,
         "expected_action": expected_action,
@@ -107,7 +157,7 @@ def build_task_send_payload(
         "params": {
             "message": {
                 "message_id": str(uuid.uuid4()),
-                "role": 1,
+                "role": Role.ROLE_USER,
                 "parts": [{"text": message}],
                 "metadata": metadata,
             },
@@ -117,6 +167,7 @@ def build_task_send_payload(
 
 
 def build_task_get_payload(task_id: str, request_id: Optional[str] = None) -> dict:
+    """Build a GetTask JSON-RPC payload per a2a.proto:654-664."""
     return {
         "jsonrpc": "2.0",
         "id": request_id or str(uuid.uuid4()),
@@ -126,6 +177,7 @@ def build_task_get_payload(task_id: str, request_id: Optional[str] = None) -> di
 
 
 def build_task_cancel_payload(task_id: str, request_id: Optional[str] = None) -> dict:
+    """Build a CancelTask JSON-RPC payload per a2a.proto."""
     return {
         "jsonrpc": "2.0",
         "id": request_id or str(uuid.uuid4()),
@@ -135,16 +187,19 @@ def build_task_cancel_payload(task_id: str, request_id: Optional[str] = None) ->
 
 
 def extract_text_from_parts(parts) -> str:
+    """Extract text from Parts using spec oneof pattern.
+
+    Per spec a2a.proto:221-242, Part is:
+      oneof content { string text, bytes raw, string url, google.protobuf.Value data }
+    """
     chunks = []
     for part in parts or []:
         if not isinstance(part, dict):
             continue
-        if part.get("type") == "text":
-            text = part.get("text", "")
-            if text:
-                chunks.append(str(text))
-        elif isinstance(part.get("text"), str):
+        # Spec oneof: {"text": "..."} directly
+        if isinstance(part.get("text"), str):
             chunks.append(part["text"])
+        # Legacy: skip type-tagged format
     return "\n".join(chunks).strip()
 
 
@@ -168,11 +223,15 @@ def build_error_response(code: int, message: str, data=None, id=None) -> dict:
 
 
 def parse_task_result(rpc_result: dict, default_task_id: str = "") -> dict:
+    """Parse a task result from JSON-RPC response.
+
+    Per spec: Task has status (TaskStatus with state, message, timestamp),
+    artifacts (repeated Artifact), etc.
+    """
     rpc_result = rpc_result or {}
-    # v1.0 wraps response in a "task" envelope
     inner = rpc_result.get("task", {}) if isinstance(rpc_result, dict) else {}
     if not inner:
-        inner = rpc_result  # fall back to old flat format
+        inner = rpc_result
 
     status = inner.get("status", {}) if isinstance(inner, dict) else {}
     state = status.get("state", "unknown") if isinstance(status, dict) else "unknown"

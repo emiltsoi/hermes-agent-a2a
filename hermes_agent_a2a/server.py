@@ -8,6 +8,7 @@ returned to the caller.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import hmac
 import json
@@ -629,13 +630,14 @@ def _build_task_list_item(task: "_PendingTask", state: str) -> dict:
         "context_id": task.context_id or task.task_id,
         "status": {
             "state": state,
+            "timestamp": datetime.datetime.fromtimestamp(task.created_at, tz=datetime.timezone.utc).isoformat(),
         },
         "created_at": task.created_at,
     }
     if task.response:
         item["status"]["message"] = filter_outbound(task.response)
         item["artifacts"] = [
-            {"parts": [{"type": "text", "text": filter_outbound(task.response)}], "index": 0}
+            {"parts": [{"text": filter_outbound(task.response)}], "index": 0}
         ]
     return item
 
@@ -682,9 +684,10 @@ def _build_paginated_task_list(page_size: int = 20, continuation_token: Optional
             items.append(_build_task_list_item(task, state))
 
     return {
-        "items": items,
-        "hasMore": has_more,
-        "nextPageToken": next_token,
+        "tasks": items,
+        "page_size": page_size,
+        "total_size": len(all_tasks),
+        "next_page_token": next_token if next_token else "",
     }
 
 
@@ -742,7 +745,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # browser CORS mismatches (Issue 13).
         if path.startswith("/tasks/") and ":subscribe" in path:
             allowed = "GET, OPTIONS"
-        elif path == "/message/stream":
+        elif path == "/message:stream":
             allowed = "POST, OPTIONS"
         else:
             allowed = "POST, OPTIONS"
@@ -943,8 +946,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             self._do_rest_post(lambda body: self._rest_send_message(body))
             return
 
-        # F-B009: POST /message/stream  (SendStreamingMessage)
-        if path == "/message/stream":
+        # F-B009: POST /message:stream  (SendStreamingMessage)
+        if path == "/message:stream":
             self._do_rest_post(lambda body: self._rest_send_message_stream(body))
             return
 
@@ -1139,7 +1142,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return {
                 "id": task_id,
                 "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": "Empty message"}], "index": 0}],
+                "artifacts": [{"parts": [{"text": "Empty message"}], "index": 0}],
             }
 
         user_text = sanitize_inbound(user_text)
@@ -1249,7 +1252,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return {
                 "id": task_id,
                 "status": {"state": "working"},
-                "artifacts": [{"parts": [{"type": "text", "text": "(processing — poll with tasks/get)"}], "index": 0}],
+                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
             }
 
         filtered = filter_outbound(task.response)
@@ -1258,7 +1261,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         result = {
             "id": task_id,
             "status": {"state": "completed"},
-            "artifacts": [{"parts": [{"type": "text", "text": filtered}], "index": 0}],
+            "artifacts": [{"parts": [{"text": filtered}], "index": 0}],
         }
 
         # Store result for idempotency replay
@@ -1294,11 +1297,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             for sub in subs:
                 for artifact in result.get("artifacts", []):
                     payload = {
-                        "kind": "artifact",
-                        "contextId": ctx_id,
-                        "taskId": task_id,
-                        "artifact": artifact,
-                        "metadata": {"index": artifact.get("index")},
+                        "artifact_update": {
+                            "context_id": ctx_id,
+                            "task_id": task_id,
+                            "artifact": artifact,
+                            "metadata": {"index": artifact.get("index")},
+                        }
                     }
                     pusher.deliver_with_retry(sub.url, payload, sub.hmac_key)
         except Exception:
@@ -1443,9 +1447,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if method == "tasks/send":
+        if method in ("tasks/send", "SendMessage"):
             result = self._handle_task_send(params, rpc_id)
-        elif method == "tasks/get":
+        elif method in ("tasks/get", "GetTask"):
             tid = params.get("id", "")
             status = _ensure_task_queue().get_status(tid)
             if status["state"] == "unknown":
@@ -1460,7 +1464,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 return
             result = {"id": tid, "status": {"state": status["state"]}}
             if status.get("response"):
-                result["artifacts"] = [{"parts": [{"type": "text", "text": filter_outbound(status["response"])}], "index": 0}]
+                result["artifacts"] = [{"parts": [{"text": filter_outbound(status["response"])}], "index": 0}]
                 # Emit TaskArtifactUpdateEvent over SSE for tasks/get polling responses
                 try:
                     from .sse_handler import emit_artifact_event, get_sse_streamer
@@ -1480,7 +1484,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                                 streamer.push_event(sid, evt)
                 except Exception:
                     pass  # SSE delivery is best-effort
-        elif method == "tasks/cancel":
+        elif method in ("tasks/cancel", "CancelTask"):
             tid = params.get("id", "")
             from .worker_registry import cancel_worker
             status = _ensure_task_queue().get_status(tid)
@@ -1529,10 +1533,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         elif method == "tasks/pushNotification":
             subscription_id = params.get("subscriptionId", "")
             result = self._handle_push_unsubscribe(params, rpc_id)
-        elif method == "tasks/sendSubscribe":
+        elif method in ("tasks/sendSubscribe", "SubscribeToTask"):
             self._handle_send_subscribe(params, rpc_id)
             return
-        elif method == "tasks/list":
+        elif method in ("tasks/list", "ListTasks"):
             page_size = min(max(int(params.get("pageSize", 20)), 1), 100)
             token = params.get("continuationToken")
             result = _build_paginated_task_list(page_size, token)
@@ -1566,7 +1570,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         result = {"id": task_id, "status": {"state": status["state"]}}
         if status.get("response"):
             result["artifacts"] = [
-                {"parts": [{"type": "text", "text": filter_outbound(status["response"])}], "index": 0}
+                {"parts": [{"text": filter_outbound(status["response"])}], "index": 0}
             ]
         self._send_json(result)
 
@@ -1707,7 +1711,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "id": str(uuid.uuid4()),
                 "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": "Empty message"}], "index": 0}],
+                "artifacts": [{"parts": [{"text": "Empty message"}], "index": 0}],
             })
             return
 
@@ -1787,7 +1791,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             result = {
                 "id": task_id,
                 "status": {"state": "working"},
-                "artifacts": [{"parts": [{"type": "text", "text": "(processing — poll with tasks/get)"}], "index": 0}],
+                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
             }
             self._send_json(result, 200)
             return
@@ -1798,7 +1802,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         result = {
             "id": task_id,
             "status": {"state": "completed"},
-            "artifacts": [{"parts": [{"type": "text", "text": filtered}], "index": 0}],
+            "artifacts": [{"parts": [{"text": filtered}], "index": 0}],
         }
 
         if idem_key:
@@ -1823,7 +1827,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "id": str(uuid.uuid4()),
                 "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": "Empty message"}], "index": 0}],
+                "artifacts": [{"parts": [{"text": "Empty message"}], "index": 0}],
             })
             return
 
@@ -1949,30 +1953,28 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Build AuthenticationInfo from request body
+        # Build AuthenticationInfo from request body — use spec field names
         auth_info = None
         raw_auth = body.get("authentication") or body.get("auth", {})
         if raw_auth:
             auth_info = AuthenticationInfo(
-                auth_type=raw_auth.get("authType") or raw_auth.get("auth_type"),
-                auth_code=raw_auth.get("authCode") or raw_auth.get("auth_code"),
+                scheme=raw_auth.get("scheme") or raw_auth.get("authType") or raw_auth.get("auth_type"),
+                credentials=raw_auth.get("credentials") or raw_auth.get("authCode") or raw_auth.get("auth_code"),
             )
 
-        # Parse into CreateTaskPushNotificationConfigRequest
+        # Parse into CreateTaskPushNotificationConfigRequest (spec-compliant: id, task_id, url)
         req = CreateTaskPushNotificationConfigRequest(
             id=body.get("id", ""),
             task_id=task_id,
-            push_transport_type=body.get("pushTransportType", "webhook"),
-            endpoint=url,
+            url=url,
             authentication=auth_info,
             metadata=body.get("metadata"),
         )
 
-        # Delegate to push_delivery CRUD
+        # Delegate to push_delivery CRUD (spec-compliant: task_id, url)
         cfg = create_push_config(
             task_id=req.task_id,
-            push_transport_type=req.push_transport_type,
-            endpoint=req.endpoint,
+            url=req.url,
             authentication=req.authentication,
             metadata=req.metadata,
         )
@@ -1983,11 +1985,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             "config": {
                 "id": response.config.id,
                 "taskId": response.config.task_id,
-                "pushTransportType": response.config.push_transport_type,
-                "endpoint": response.config.endpoint,
+                "url": response.config.url,
                 "authentication": {
-                    "authType": response.config.authentication.auth_type,
-                    "authCode": response.config.authentication.auth_code,
+                    "scheme": response.config.authentication.scheme if response.config.authentication else None,
+                    "credentials": response.config.authentication.credentials if response.config.authentication else None,
                 } if response.config.authentication else None,
                 "metadata": response.config.metadata,
             },
@@ -2027,11 +2028,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             "config": {
                 "id": response.config.id,
                 "taskId": response.config.task_id,
-                "pushTransportType": response.config.push_transport_type,
-                "endpoint": response.config.endpoint,
+                "url": response.config.url,
                 "authentication": {
-                    "authType": response.config.authentication.auth_type,
-                    "authCode": response.config.authentication.auth_code,
+                    "scheme": response.config.authentication.scheme if response.config.authentication else None,
+                    "credentials": response.config.authentication.credentials if response.config.authentication else None,
                 } if response.config.authentication else None,
                 "metadata": response.config.metadata,
             },
@@ -2064,17 +2064,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 {
                     "id": c.id,
                     "taskId": c.task_id,
-                    "pushTransportType": c.push_transport_type,
-                    "endpoint": c.endpoint,
+                    "url": c.url,
                     "authentication": {
-                        "authType": c.authentication.auth_type,
-                        "authCode": c.authentication.auth_code,
+                        "scheme": c.authentication.scheme if c.authentication else None,
+                        "credentials": c.authentication.credentials if c.authentication else None,
                     } if c.authentication else None,
                     "metadata": c.metadata,
                 }
                 for c in response.items
             ],
-            "hasMore": response.has_more,
         })
 
     def _rest_delete_push_config(self, task_id: str, config_id: str) -> None:
@@ -2105,8 +2103,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        response = DeleteTaskPushNotificationConfigResponse(config_id=deleted_id)
-        self._send_json({"configId": response.config_id, "config_id": response.config_id})
+        # DELETE returns 204 with empty body per spec (google.protobuf.Empty)
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
+        self.end_headers()
 
     def _rest_get_extended_agent_card(self) -> None:
         """F-B011: GET /extendedAgentCard — return full extended AgentCard."""
@@ -2193,12 +2194,12 @@ class A2AServer(ThreadingHTTPServer):
             "version": HERMES_VERSION,
             "protocol": "a2a",
             "protocolVersion": "0.2.0",
-            "provider": {"organization": "Hermes Fleet", "category": "official"},
+            "provider": {"url": public_url, "organization": "Hermes Fleet"},
             "capabilities": {
                 "streaming": True,
-                "pushNotifications": push_notif,
-                "multiTurn": False,
-                "structuredMetadata": True,
+                "push_notifications": push_notif,
+                "extensions": False,
+                "extended_agent_card": True,
             },
             "skills": [
                 {
@@ -2206,7 +2207,15 @@ class A2AServer(ThreadingHTTPServer):
                     "name": "General Assistant",
                 }
             ],
-            "authentication": {
-                "schemes": ["bearer"] if self.auth_token else [],
-            },
+            "supported_interfaces": [
+                {
+                    "url": public_url,
+                    "protocol_binding": "http://a2a-protocol.hermes.ai",
+                    "protocol_version": "0.2.0",
+                }
+            ],
+            "default_input_modes": ["text"],
+            "default_output_modes": ["text"],
+            "security_schemes": [{"type": "bearer", "bearer_format": "JWT"}] if self.auth_token else [],
+            "security_requirements": [{"bearer": []}] if self.auth_token else [],
         }

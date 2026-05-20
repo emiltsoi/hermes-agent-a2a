@@ -102,7 +102,8 @@ def _rest_delete(port, path, auth_token="test-secret"):
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode()), resp.status
+            body = resp.read().decode()
+            return json.loads(body) if body else {}, resp.status
     except urllib.error.HTTPError as e:
         return json.loads(e.read().decode()), e.code
 
@@ -231,10 +232,10 @@ class TestRestCreatePushConfig:
         cfg = get_push_config(task_id, config_id)
         assert cfg is not None, "Config must be stored in push_delivery"
         assert cfg.task_id == task_id
-        assert cfg.endpoint == "https://example.com/callback"
+        assert cfg.url == "https://example.com/callback"
 
-    def test_response_contains_task_id_and_transport_type(self, fresh_server):
-        """Response must include the task_id and push_transport_type."""
+    def test_response_contains_task_id_and_url(self, fresh_server):
+        """Response must include the task_id and url."""
         server, port = fresh_server
         task_id = _seed_task(port)
 
@@ -244,13 +245,12 @@ class TestRestCreatePushConfig:
             {
                 "url": "https://x.com/h",
                 "hmacKey": "k",
-                "pushTransportType": "webhook",
             },
         )
         assert status == 201
         config = body.get("config", body)
         assert config.get("taskId") == task_id or config.get("task_id") == task_id
-        assert config.get("pushTransportType") == "webhook"
+        assert config.get("url") == "https://x.com/h"
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +323,8 @@ class TestRestGetPushConfig:
         assert status == 404, \
             f"Config from task_id_1 must not be accessible under task_id_2: got {status}"
 
-    def test_config_contains_endpoint_and_authentication(self, fresh_server):
-        """GET response must include endpoint and authentication from the stored config."""
+    def test_config_contains_url_and_authentication(self, fresh_server):
+        """GET response must include url and authentication from the stored config."""
         server, port = fresh_server
         task_id = _seed_task(port)
 
@@ -335,8 +335,8 @@ class TestRestGetPushConfig:
                 "url": "https://example.com/secure-hook",
                 "hmacKey": "my-secret",
                 "authentication": {
-                    "authType": "bearer",
-                    "authCode": "tok456",
+                    "scheme": "bearer",
+                    "credentials": "tok456",
                 },
             },
         )
@@ -345,12 +345,12 @@ class TestRestGetPushConfig:
         body, status = _rest_get(port, f"/tasks/{task_id}/pushNotificationConfigs/{config_id}")
         assert status == 200
         cfg = body.get("config", body)
-        # Must return endpoint and authentication info
-        assert "endpoint" in cfg or "url" in cfg, f"Config must include endpoint: {body}"
+        # Must return url and authentication info
+        assert "url" in cfg, f"Config must include url: {body}"
         if "authentication" in cfg:
-            assert cfg["authentication"].get("authType") == "bearer" or \
+            assert cfg["authentication"].get("scheme") == "bearer" or \
                    cfg["authentication"].get("auth_type") == "bearer", \
-                   f"Authentication authType must be preserved: {body}"
+                   f"Authentication scheme must be preserved: {body}"
 
 
 # ---------------------------------------------------------------------------
@@ -429,8 +429,8 @@ class TestRestListPushConfigs:
 class TestRestDeletePushConfig:
     """DELETE /tasks/{id}/pushNotificationConfigs/{config_id}."""
 
-    def test_returns_200_on_success(self, fresh_server):
-        """Handler must return 200 on successful deletion."""
+    def test_returns_204_on_success(self, fresh_server):
+        """Handler must return 204 with empty body on successful deletion."""
         server, port = fresh_server
         task_id = _seed_task(port)
 
@@ -447,27 +447,7 @@ class TestRestDeletePushConfig:
             port,
             f"/tasks/{task_id}/pushNotificationConfigs/{config_id}",
         )
-        assert status == 200, f"Expected 200 on delete, got {status}: {body}"
-
-    def test_returns_deleted_config_id_in_response(self, fresh_server):
-        """Response must contain the deleted config_id."""
-        server, port = fresh_server
-        task_id = _seed_task(port)
-
-        create_body, _ = _rest_post(
-            port,
-            f"/tasks/{task_id}/pushNotificationConfigs",
-            {"url": "https://x.com/h", "hmacKey": "k"},
-        )
-        config_id = create_body.get("configId") or (create_body.get("config") or {}).get("id")
-
-        body, status = _rest_delete(
-            port,
-            f"/tasks/{task_id}/pushNotificationConfigs/{config_id}",
-        )
-        assert status == 200
-        assert body.get("configId") == config_id or body.get("config_id") == config_id, \
-            f"Response must contain deleted config_id: {body}"
+        assert status == 204, f"Expected 204 on delete, got {status}: {body}"
 
     def test_returns_404_for_unknown_config_id(self, fresh_server):
         """Must return 404 when deleting a non-existent config."""

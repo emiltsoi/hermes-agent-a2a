@@ -597,9 +597,9 @@ class TestTaskStateMachine:
         assert is_terminal_state("canceled") is True
 
     def test_rejected_is_auth_substate(self):
-        """rejected is an AUTH sub-state, not a terminal TaskState."""
+        """rejected is an AUTH sub-state and IS a terminal TaskState per spec."""
         from hermes_agent_a2a.a2a_spec.tasks import is_terminal_state, AUTH_STATES
-        assert is_terminal_state("rejected") is False
+        assert is_terminal_state("rejected") is True
         assert "rejected" in AUTH_STATES
 
     def test_active_states_contains_input_required(self):

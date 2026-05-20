@@ -1,13 +1,17 @@
 """Google A2A-shaped helpers plus Hermes metadata extensions."""
 
 from .agent_card import (
-    Provider,
-    Skill,
+    AgentProvider,
+    AgentSkill,
     AgentCapabilities,
+    AgentInterface,
     ExtendedAgentCard,
     build_extended_agent_card,
     skill_names,
     validate_skill,
+    # Legacy aliases (DEPRECATED)
+    Provider,
+    Skill,
 )
 from .hermes_ext import build_hermes_metadata
 from .tasks import (
@@ -44,14 +48,18 @@ __all__ = [
     "is_terminal_state",
     "parse_json_rpc_error",
     "parse_task_result",
-    # Agent Card models (T1-3)
-    "Provider",
-    "Skill",
+    # Agent Card models (spec-compliant)
+    "AgentProvider",
+    "AgentSkill",
     "AgentCapabilities",
+    "AgentInterface",
     "ExtendedAgentCard",
     "build_extended_agent_card",
     "skill_names",
     "validate_skill",
+    # Legacy Agent Card models (DEPRECATED)
+    "Provider",
+    "Skill",
     # Push notification models (T1-1a)
     "AuthenticationInfo",
     "TaskPushNotificationConfig",

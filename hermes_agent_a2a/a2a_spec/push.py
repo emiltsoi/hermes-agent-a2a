@@ -1,42 +1,43 @@
 """Google A2A Task Push Notification models — T1-1a.
 
-Spec reference: Google A2A proto3 spec, tasks/pushNotification methods.
+Spec reference: a2a.proto:325-332 (AuthenticationInfo), a2a.proto:464-478 (TaskPushNotificationConfig).
 """
+
 from dataclasses import dataclass, field
 from typing import Optional, List
 
 
 @dataclass
 class AuthenticationInfo:
-    """Embedded auth info within TaskPushNotificationConfig.
+    """AuthenticationInfo per a2a.proto:325-332.
 
-    Per spec: auth_type (string), auth_code (string, optional).
-    All fields are optional.
+    Per spec: scheme (REQUIRED), credentials (optional).
+    All fields optional here for flexibility.
     """
-    auth_type: Optional[str] = None
-    auth_code: Optional[str] = None
+    scheme: Optional[str] = None
+    credentials: Optional[str] = None
 
 
 @dataclass
 class TaskPushNotificationConfig:
-    """Per spec: a registered push notification config for a task.
+    """TaskPushNotificationConfig per a2a.proto:464-478.
 
-    Fields: id, task_id, push_transport_type, endpoint, authentication (opt), metadata (opt).
-    push_transport_type values: "webhook", "gcm", etc.
+    Per spec: tenant, id (REQUIRED), task_id (REQUIRED), url (REQUIRED), token (opt), authentication (opt).
     """
     id: str
     task_id: str
-    push_transport_type: str
-    endpoint: str
+    url: str
+    tenant: Optional[str] = None
+    token: Optional[str] = None
     authentication: Optional[AuthenticationInfo] = None
     metadata: Optional[dict] = None
 
 
 @dataclass
 class TaskPushNotificationConfigList:
-    """Wrapper for list responses.
+    """Paginated list of push notification configs.
 
-    Fields: items (list), has_more (bool).
+    Per spec: items (repeated), has_more (bool).
     """
     items: List[TaskPushNotificationConfig] = field(default_factory=list)
     has_more: bool = False
@@ -44,21 +45,22 @@ class TaskPushNotificationConfigList:
 
 @dataclass
 class CreateTaskPushNotificationConfigRequest:
-    """Create a push notification config for a task.
+    """CreateTaskPushNotificationConfigRequest per a2a.proto.
 
-    Fields: id, task_id, push_transport_type, endpoint, authentication (opt), metadata (opt).
+    Per spec: tenant, id, task_id, url (REQUIRED), token (opt), authentication (opt), metadata (opt).
     """
     id: str
     task_id: str
-    push_transport_type: str
-    endpoint: str
+    url: str
+    tenant: Optional[str] = None
+    token: Optional[str] = None
     authentication: Optional[AuthenticationInfo] = None
     metadata: Optional[dict] = None
 
 
 @dataclass
 class CreateTaskPushNotificationConfigResponse:
-    """Response after creating a push notification config.
+    """CreateTaskPushNotificationConfigResponse per a2a.proto.
 
     Fields: config (TaskPushNotificationConfig).
     """
@@ -67,17 +69,18 @@ class CreateTaskPushNotificationConfigResponse:
 
 @dataclass
 class GetTaskPushNotificationConfigRequest:
-    """Request to retrieve a single push notification config.
+    """GetTaskPushNotificationConfigRequest per a2a.proto.
 
-    Fields: task_id, config_id.
+    Per spec: tenant, id (config_id) — task_id is in URL path.
     """
     task_id: str
     config_id: str
+    tenant: Optional[str] = None
 
 
 @dataclass
 class GetTaskPushNotificationConfigResponse:
-    """Response with a single push notification config.
+    """GetTaskPushNotificationConfigResponse per a2a.proto.
 
     Fields: config (TaskPushNotificationConfig).
     """
@@ -86,16 +89,17 @@ class GetTaskPushNotificationConfigResponse:
 
 @dataclass
 class ListTaskPushNotificationConfigsRequest:
-    """Request to list all push notification configs for a task.
+    """ListTaskPushNotificationConfigsRequest per a2a.proto.
 
-    Fields: task_id.
+    Per spec: tenant, task_id.
     """
     task_id: str
+    tenant: Optional[str] = None
 
 
 @dataclass
 class ListTaskPushNotificationConfigsResponse:
-    """Paginated list of push notification configs for a task.
+    """ListTaskPushNotificationConfigsResponse per a2a.proto.
 
     Fields: items, has_more.
     """
@@ -105,18 +109,20 @@ class ListTaskPushNotificationConfigsResponse:
 
 @dataclass
 class DeleteTaskPushNotificationConfigRequest:
-    """Request to delete a push notification config.
+    """DeleteTaskPushNotificationConfigRequest per a2a.proto.
 
-    Fields: task_id, config_id.
+    Per spec: tenant, id (config_id) — task_id is in URL path.
     """
     task_id: str
     config_id: str
+    tenant: Optional[str] = None
 
 
 @dataclass
 class DeleteTaskPushNotificationConfigResponse:
-    """Response after deleting a push notification config.
+    """DeleteTaskPushNotificationConfigResponse per a2a.proto.
 
-    Fields: config_id.
+    Per spec: returns google.protobuf.Empty (no body), HTTP 204.
+    For backward compat, include config_id field.
     """
-    config_id: str
+    config_id: Optional[str] = None
