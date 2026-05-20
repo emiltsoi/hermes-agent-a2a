@@ -632,22 +632,87 @@ def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:
 # ListTasks helpers (shared between REST and JSON-RPC)
 # -------------------------------------------------------------------------
 
-def _build_task_list_item(task: "_PendingTask", state: str) -> dict:
-    """Build a single task item dict for ListTasks responses."""
-    item = {
-        "id": task.task_id,
-        "context_id": task.context_id or task.task_id,
-        "status": {
-            "state": state,
-            "timestamp": datetime.datetime.fromtimestamp(task.created_at, tz=datetime.timezone.utc).isoformat(),
-        },
-        "created_at": task.created_at,
+def _utc_now_iso() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _build_message_object(text: str, role: int = 2, message_id: Optional[str] = None) -> dict:
+    """Build a proto-compliant Message object per a2a.proto:260-277.
+
+    Args:
+        text: The message text content.
+        role: Role enum value (1=USER, 2=AGENT). Default AGENT since this is server response.
+        message_id: Optional message ID. If not provided, a UUID is generated.
+    """
+    from .a2a_spec.tasks import Role
+    return {
+        "message_id": message_id or str(uuid.uuid4()),
+        "role": role,
+        "parts": [{"text": text}] if text else [],
+        "metadata": {},
     }
-    if task.response:
-        item["status"]["message"] = filter_outbound(task.response)
-        item["artifacts"] = [
-            {"parts": [{"text": filter_outbound(task.response)}], "index": 0}
+
+
+def _build_task_status(state: str, message_text: Optional[str] = None, timestamp: Optional[str] = None) -> dict:
+    """Build a proto-compliant TaskStatus object per a2a.proto:211-219.
+
+    TaskStatus.message is a Message object, not a raw string.
+    """
+    status = {
+        "state": state,
+        "timestamp": timestamp or _utc_now_iso(),
+    }
+    if message_text:
+        status["message"] = _build_message_object(message_text, role=2)
+    return status
+
+
+def _build_task_object(task_id: str, state: str, context_id: Optional[str] = None,
+                       response: Optional[str] = None, created_at: Optional[float] = None) -> dict:
+    """Build a proto-compliant Task object per a2a.proto:163-183.
+
+    Returns a full Task with all fields: id, context_id, status, artifacts.
+    """
+    ctx_id = context_id or task_id
+    filtered = filter_outbound(response) if response else None
+
+    task = {
+        "id": task_id,
+        "context_id": ctx_id,
+        "status": _build_task_status(state, filtered),
+    }
+
+    if created_at is not None:
+        task["status"]["timestamp"] = datetime.datetime.fromtimestamp(
+            created_at, tz=datetime.timezone.utc
+        ).isoformat()
+
+    if filtered:
+        task["artifacts"] = [
+            {
+                "artifact_id": str(uuid.uuid4()),
+                "parts": [{"text": filtered}],
+                "index": 0,
+            }
         ]
+
+    return task
+
+
+def _build_task_list_item(task: "_PendingTask", state: str) -> dict:
+    """Build a single task item dict for ListTasks responses.
+
+    Returns a proto-compliant Task object per a2a.proto:163-183.
+    """
+    filtered = filter_outbound(task.response) if task.response else None
+    item = _build_task_object(
+        task_id=task.task_id,
+        state=state,
+        context_id=task.context_id,
+        response=task.response,
+        created_at=task.created_at,
+    )
     return item
 
 
@@ -1172,11 +1237,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         user_text = "\n".join(text_parts)
 
         if not user_text.strip():
-            return {
-                "id": task_id,
-                "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"text": "Empty message"}], "index": 0}],
-            }
+            return _build_task_object(
+                task_id=task_id,
+                state="failed",
+                response="Empty message",
+            )
 
         user_text = sanitize_inbound(user_text)
         metadata = message.get("metadata", {})
@@ -1282,29 +1347,32 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # Per SendMessageConfiguration.return_immediately (a2a.proto:143-161):
         # If True, return immediately without waiting for task completion.
         if return_immediately:
-            return {
-                "id": task_id,
-                "status": {"state": "working"},
-                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
-            }
+            return _build_task_object(
+                task_id=task_id,
+                state="working",
+                context_id=task.context_id,
+                response="(processing — poll with tasks/get)",
+            )
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 
         if task.response is None:
-            return {
-                "id": task_id,
-                "status": {"state": "working"},
-                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
-            }
+            return _build_task_object(
+                task_id=task_id,
+                state="working",
+                context_id=task.context_id,
+                response="(processing — poll with tasks/get)",
+            )
 
         filtered = filter_outbound(task.response)
         audit.log("task_completed", {"task_id": task_id, "response_length": len(filtered)})
 
-        result = {
-            "id": task_id,
-            "status": {"state": "completed"},
-            "artifacts": [{"parts": [{"text": filtered}], "index": 0}],
-        }
+        result = _build_task_object(
+            task_id=task_id,
+            state="completed",
+            context_id=task.context_id,
+            response=filtered,
+        )
 
         # Store result for idempotency replay
         if idem_key:
@@ -1504,28 +1572,31 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                     404,
                 )
                 return
-            result = {"id": tid, "status": {"state": status["state"]}}
-            if status.get("response"):
-                result["artifacts"] = [{"parts": [{"text": filter_outbound(status["response"])}], "index": 0}]
-                # Emit TaskArtifactUpdateEvent over SSE for GetTask polling responses
-                try:
-                    from .sse_handler import emit_artifact_event, get_sse_streamer
-                    streamer = get_sse_streamer()
-                    stream_ids = streamer.get_stream_ids_for_task(tid)
-                    if stream_ids:
-                        pending_task = _ensure_task_queue().find_task_by_id(tid)
-                        ctx_id = pending_task.context_id if pending_task else tid
-                        for artifact in result.get("artifacts", []):
-                            evt = emit_artifact_event(
-                                task_id=tid,
-                                context_id=ctx_id,
-                                artifact=artifact,
-                                metadata={"index": artifact.get("index")},
-                            )
-                            for sid in stream_ids:
-                                streamer.push_event(sid, evt)
-                except Exception:
-                    pass  # SSE delivery is best-effort
+            # Build full proto-compliant Task per a2a.proto:163-183
+            result = _build_task_object(
+                task_id=tid,
+                state=status["state"],
+                response=status.get("response"),
+            )
+            # Emit TaskArtifactUpdateEvent over SSE for GetTask polling responses
+            try:
+                from .sse_handler import emit_artifact_event, get_sse_streamer
+                streamer = get_sse_streamer()
+                stream_ids = streamer.get_stream_ids_for_task(tid)
+                if stream_ids:
+                    pending_task = _ensure_task_queue().find_task_by_id(tid)
+                    ctx_id = pending_task.context_id if pending_task else tid
+                    for artifact in result.get("artifacts", []):
+                        evt = emit_artifact_event(
+                            task_id=tid,
+                            context_id=ctx_id,
+                            artifact=artifact,
+                            metadata={"index": artifact.get("index")},
+                        )
+                        for sid in stream_ids:
+                            streamer.push_event(sid, evt)
+            except Exception:
+                pass  # SSE delivery is best-effort
         elif method == "CancelTask":
             tid = params.get("id", "")
             from .worker_registry import cancel_worker
@@ -1587,11 +1658,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 404,
             )
             return
-        result = {"id": task_id, "status": {"state": status["state"]}}
-        if status.get("response"):
-            result["artifacts"] = [
-                {"parts": [{"text": filter_outbound(status["response"])}], "index": 0}
-            ]
+        # Build full proto-compliant Task per a2a.proto:163-183
+        result = _build_task_object(
+            task_id=task_id,
+            state=status["state"],
+            response=status.get("response"),
+        )
         self._send_json(result)
 
     def _rest_list_tasks(self) -> None:
@@ -1635,11 +1707,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return
         worker_canceled = cancel_worker(task_id)
         _ensure_task_queue().cancel(task_id)
-        self._send_json({
-            "id": task_id,
-            "status": {"state": "canceled"},
-            "metadata": {"hermes": {"worker_canceled": worker_canceled}},
-        })
+        # Build full proto-compliant Task per a2a.proto:163-183
+        result = _build_task_object(task_id=task_id, state="canceled")
+        self._send_json(result)
 
     def _rest_subscribe_to_task(self, task_id: str) -> None:
         """F-B008: GET /tasks/{id}:subscribe — SSE stream for task updates."""
