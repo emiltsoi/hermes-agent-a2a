@@ -173,7 +173,7 @@ class TestSendSubscribeEndpoint:
         body = {
             "jsonrpc": "2.0",
             "id": "ss-1",
-            "method": "tasks/sendSubscribe",
+            "method": "SubscribeToTask",
             "params": {"taskId": "sse-test-task-1"},
         }
         b = json.dumps(body).encode()
@@ -223,7 +223,7 @@ class TestSendSubscribeEndpoint:
         body = {
             "jsonrpc": "2.0",
             "id": "ss-notfound",
-            "method": "tasks/sendSubscribe",
+            "method": "SubscribeToTask",
             "params": {"taskId": "nonexistent-sse-task-xyz"},
         }
         result, headers = _rpc_request(port, body)
@@ -253,7 +253,7 @@ class TestSendSubscribeEndpoint:
             body = {
                 "jsonrpc": "2.0",
                 "id": "ss-comp-1",
-                "method": "tasks/sendSubscribe",
+                "method": "SubscribeToTask",
                 "params": {"taskId": "completed-sse-task"},
             }
             b = json.dumps(body).encode()

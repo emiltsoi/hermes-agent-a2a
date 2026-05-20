@@ -38,12 +38,12 @@ def _make_task_send_body(task_id, text="hello"):
     return {
         "jsonrpc": "2.0",
         "id": "1",
-        "method": "tasks/send",
+        "method": "SendMessage",
         "params": {
             "id": task_id,
             "message": {
                 "role": "user",
-                "parts": [{"type": "text", "text": text}],
+                "parts": [{"text": text}],
                 "metadata": {},
             },
         },
@@ -283,7 +283,7 @@ class TestListTasksJsonRpc:
         payload = {
             "jsonrpc": "2.0",
             "id": "1",
-            "method": "tasks/list",
+            "method": "ListTasks",
             "params": {},
         }
         result, headers = _rpc_request(port, payload)
@@ -304,7 +304,7 @@ class TestListTasksJsonRpc:
         payload = {
             "jsonrpc": "2.0",
             "id": "1",
-            "method": "tasks/list",
+            "method": "ListTasks",
             "params": {"pageSize": 2},
         }
         result, _ = _rpc_request(port, payload)
@@ -323,7 +323,7 @@ class TestListTasksJsonRpc:
         payload1 = {
             "jsonrpc": "2.0",
             "id": "1",
-            "method": "tasks/list",
+            "method": "ListTasks",
             "params": {"pageSize": 2},
         }
         result1, _ = _rpc_request(port, payload1)
@@ -334,7 +334,7 @@ class TestListTasksJsonRpc:
         payload2 = {
             "jsonrpc": "2.0",
             "id": "2",
-            "method": "tasks/list",
+            "method": "ListTasks",
             "params": {"pageSize": 2, "continuationToken": token},
         }
         result2, _ = _rpc_request(port, payload2)

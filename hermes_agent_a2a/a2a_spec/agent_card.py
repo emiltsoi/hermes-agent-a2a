@@ -133,43 +133,7 @@ def build_extended_agent_card(overrides: Optional[dict] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Legacy aliases for backward compatibility
-# ---------------------------------------------------------------------------
-
-@dataclass
-class Provider:
-    """Legacy alias for AgentProvider — DEPRECATED, use AgentProvider."""
-    organization: str
-    url: Optional[str] = None
-
-
-@dataclass
-class Skill:
-    """Legacy alias for AgentSkill — DEPRECATED, use AgentSkill."""
-    id: str
-    name: str
-    description: Optional[str] = None
-    tags: Optional[List[str]] = None
-
-
-# Backward-compat wrapper for ExtendedAgentCard with old field names
-@dataclass
-class LegacyAgentCard:
-    """Legacy ExtendedAgentCard with camelCase field names — DEPRECATED."""
-    name: str
-    description: str
-    provider: Provider
-    agentCapabilities: AgentCapabilities
-    defaultInputModes: List[str]
-    defaultOutputModes: List[str]
-    url: Optional[str] = None
-    version: Optional[str] = None
-    documentationUrl: Optional[str] = None
-    skills: Optional[List[Skill]] = None
-
-
-# ---------------------------------------------------------------------------
-# Legacy skill helpers (pre-existing)
+# Skill helpers
 # ---------------------------------------------------------------------------
 
 

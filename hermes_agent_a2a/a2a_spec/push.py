@@ -123,6 +123,5 @@ class DeleteTaskPushNotificationConfigResponse:
     """DeleteTaskPushNotificationConfigResponse per a2a.proto.
 
     Per spec: returns google.protobuf.Empty (no body), HTTP 204.
-    For backward compat, include config_id field.
     """
-    config_id: Optional[str] = None
+    pass

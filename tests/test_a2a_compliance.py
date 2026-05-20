@@ -107,12 +107,12 @@ def _make_task_send_body(task_id, text="hello", idempotency_key=None):
     body = {
         "jsonrpc": "2.0",
         "id": "1",
-        "method": "tasks/send",
+        "method": "SendMessage",
         "params": {
             "id": task_id,
             "message": {
                 "role": "user",
-                "parts": [{"type": "text", "text": text}],
+                "parts": [{"text": text}],
                 "metadata": {},
             },
         },
@@ -335,12 +335,12 @@ class TestErrorSchema:
         body = {
             "jsonrpc": "2.0",
             "id": "1",
-            "method": "tasks/send",
+            "method": "SendMessage",
             "params": {
                 "id": "int-err-1",
                 "message": {
                     "role": "user",
-                    "parts": [{"type": "text", "text": ""}],
+                    "parts": [{"text": ""}],
                     "metadata": {},
                 },
             },
@@ -360,7 +360,7 @@ class TestErrorSchema:
         body = {
             "jsonrpc": "2.0",
             "id": "99",
-            "method": "tasks/get",
+            "method": "GetTask",
             "params": {"id": "nonexistent-task-xyz"},
         }
         result, _ = _rpc_request(port, body)
@@ -386,7 +386,7 @@ class TestErrorSchema:
         body = {
             "jsonrpc": "2.0",
             "id": "cxl-1",
-            "method": "tasks/cancel",
+            "method": "CancelTask",
             "params": {"id": task_id},
         }
         result, _ = _rpc_request(port, body)
@@ -399,29 +399,37 @@ class TestErrorSchema:
                 f"Non-cancelable task must return -38001, got: {result['error']}"
 
     def test_push_notification_returns_valid_response(self, fresh_server):
-        """pushNotification/subscribe returns a subscriptionId for existing tasks."""
+        """POST /tasks/{taskId}/pushNotificationConfigs creates a push config (spec-compliant REST)."""
         server, port = fresh_server
 
-        # Create the task so pushNotification finds it
+        # Create the task so push config endpoint finds it
         from hermes_agent_a2a.server import _ensure_task_queue
         q = _ensure_task_queue()
         q.enqueue("t1", "hello", {"sender_name": "test"})
 
-        body = {
-            "jsonrpc": "2.0",
-            "id": "push-1",
-            "method": "tasks/pushNotification/subscribe",
-            "params": {
-                "taskId": "t1",
-                "url": "https://example.com/callback",
-                "hmacKey": "key123",
-            },
+        # Use REST endpoint instead of non-spec JSON-RPC pushNotification/subscribe
+        import urllib.request, urllib.error
+        push_body = {
+            "url": "https://example.com/callback",
+            "hmacKey": "key123",
         }
-        result, _ = _rpc_request(port, body)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/tasks/t1/pushNotificationConfigs",
+            data=json.dumps(push_body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer test-secret"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read().decode())
+                status = resp.status
+        except urllib.error.HTTPError as e:
+            result = json.loads(e.read().decode())
+            status = e.code
 
-        assert "result" in result, f"pushNotification/subscribe must succeed for existing task: {result}"
-        sub_id = result["result"].get("subscriptionId")
-        assert sub_id, f"subscribe must return subscriptionId, got: {result['result']}"
+        assert status == 201, f"pushNotificationConfig create must succeed: got {status}: {result}"
+        config_id = result.get("configId") or result.get("config", {}).get("id")
+        assert config_id, f"create must return configId, got: {result}"
 
     def test_invalid_state_transition_returns_code_minus_38003(self, fresh_server):
         """Invalid state transition returns -38003."""

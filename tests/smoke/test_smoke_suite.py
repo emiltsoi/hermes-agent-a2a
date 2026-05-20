@@ -38,7 +38,7 @@ def make_task_id() -> str:
 def make_message(text: str = "smoke test ping") -> dict:
     return {
         "role": "user",
-        "parts": [{"type": "text", "text": text}],
+        "parts": [{"text": text}],
         "messageId": f"msg-{uuid.uuid4().hex[:8]}",
     }
 
@@ -212,7 +212,7 @@ class TestMode1_JSONRPC:
         with httpx.Client(base_url=YOYO_BASE, timeout=10) as client:
             payload = {
                 "jsonrpc": "2.0",
-                "method": "tasks/send",
+                "method": "SendMessage",
                 "params": {
                     "id": make_task_id(),
                     "message": make_message(),
@@ -233,7 +233,7 @@ class TestMode1_JSONRPC:
             # Create
             create_payload = {
                 "jsonrpc": "2.0",
-                "method": "tasks/send",
+                "method": "SendMessage",
                 "params": {"id": task_id, "message": make_message()},
                 "id": 1,
             }
@@ -245,7 +245,7 @@ class TestMode1_JSONRPC:
             # Get
             get_payload = {
                 "jsonrpc": "2.0",
-                "method": "tasks/get",
+                "method": "GetTask",
                 "params": {"id": task_id},
                 "id": 2,
             }
@@ -314,7 +314,7 @@ class TestMode1_A2A:
         with httpx.Client(base_url=ISA_BASE, timeout=10) as client:
             payload = {
                 "jsonrpc": "2.0",
-                "method": "tasks/send",
+                "method": "SendMessage",
                 "params": {
                     "id": make_task_id(),
                     "message": make_message("a2a smoke test isa→yoyo"),
@@ -331,7 +331,7 @@ class TestMode1_A2A:
         with httpx.Client(base_url=YOYO_BASE, timeout=10) as client:
             payload = {
                 "jsonrpc": "2.0",
-                "method": "tasks/send",
+                "method": "SendMessage",
                 "params": {
                     "id": make_task_id(),
                     "message": make_message("a2a smoke test yoyo→isa"),

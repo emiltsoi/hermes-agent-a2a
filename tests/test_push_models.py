@@ -156,6 +156,5 @@ class TestDeleteTaskPushNotificationConfigRequest:
 
 
 class TestDeleteTaskPushNotificationConfigResponse:
-    def test_config_id(self):
-        resp = DeleteTaskPushNotificationConfigResponse(config_id="c1")
-        assert resp.config_id == "c1"
+    # Per spec: DeleteTaskPushNotificationConfigResponse is google.protobuf.Empty (no fields)
+    pass

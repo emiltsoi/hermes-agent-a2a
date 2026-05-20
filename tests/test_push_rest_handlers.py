@@ -43,12 +43,12 @@ def _make_task_send_body(task_id, text="hello"):
     return {
         "jsonrpc": "2.0",
         "id": "1",
-        "method": "tasks/send",
+        "method": "SendMessage",
         "params": {
             "id": task_id,
             "message": {
                 "role": "user",
-                "parts": [{"type": "text", "text": text}],
+                "parts": [{"text": text}],
                 "metadata": {},
             },
         },

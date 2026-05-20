@@ -86,11 +86,11 @@ class TestTaskArtifactUpdateEventDataclass:
         evt = TaskArtifactUpdateEvent(
             context_id="ctx-1",
             task_id="task-1",
-            artifact={"parts": [{"type": "text", "text": "hello"}]},
+            artifact={"parts": [{"text": "hello"}]},
         )
         assert evt.context_id == "ctx-1"
         assert evt.task_id == "task-1"
-        assert evt.artifact == {"parts": [{"type": "text", "text": "hello"}]}
+        assert evt.artifact == {"parts": [{"text": "hello"}]}
 
     def test_task_artifact_update_event_optional_metadata(self):
         """TaskArtifactUpdateEvent must accept optional metadata field."""
@@ -99,7 +99,7 @@ class TestTaskArtifactUpdateEventDataclass:
         evt = TaskArtifactUpdateEvent(
             context_id="ctx-1",
             task_id="task-1",
-            artifact={"parts": [{"type": "text", "text": "hello"}]},
+            artifact={"parts": [{"text": "hello"}]},
             metadata={"index": 0},
         )
         assert evt.metadata == {"index": 0}
@@ -123,13 +123,13 @@ class TestEmitArtifactEvent:
         result = emit_artifact_event(
             task_id="task-1",
             context_id="ctx-1",
-            artifact={"parts": [{"type": "text", "text": "hello"}]},
+            artifact={"parts": [{"text": "hello"}]},
             metadata=None,
         )
         assert result.kind == "artifact"
         assert result.task_id == "task-1"
         assert result.context_id == "ctx-1"
-        assert result.artifact == {"parts": [{"type": "text", "text": "hello"}]}
+        assert result.artifact == {"parts": [{"text": "hello"}]}
 
     def test_emit_artifact_event_with_metadata(self):
         """emit_artifact_event passes metadata through."""
@@ -138,7 +138,7 @@ class TestEmitArtifactEvent:
         result = emit_artifact_event(
             task_id="task-1",
             context_id="ctx-1",
-            artifact={"parts": [{"type": "text", "text": "hello"}]},
+            artifact={"parts": [{"text": "hello"}]},
             metadata={"index": 0},
         )
         assert result.metadata == {"index": 0}
@@ -150,7 +150,7 @@ class TestEmitArtifactEvent:
         result = emit_artifact_event(
             task_id="task-1",
             context_id="ctx-1",
-            artifact={"parts": [{"type": "text", "text": "hello"}]},
+            artifact={"parts": [{"text": "hello"}]},
             metadata={"index": 0},
         )
         sse_line = result.to_sse_line()
@@ -182,7 +182,7 @@ class TestArtifactEventIntegration:
         event = emit_artifact_event(
             task_id="task-artifact-1",
             context_id="ctx-artifact-1",
-            artifact={"parts": [{"type": "text", "text": "artifact content"}], "index": 0},
+            artifact={"parts": [{"text": "artifact content"}], "index": 0},
             metadata={"index": 0},
         )
         streamer.push_event(stream_id, event)
@@ -206,13 +206,13 @@ class TestArtifactEventIntegration:
         # First create the task via tasks/send so it exists
         resp, _ = _rpc_request(port, {
             "jsonrpc": "2.0",
-            "method": "tasks/send",
+            "method": "SendMessage",
             "params": {
                 "id": task_id,
                 "message": {
                     "message_id": "msg-1",
                     "role": "user",
-                    "parts": [{"type": "text", "text": "hello"}],
+                    "parts": [{"text": "hello"}],
                 },
             },
         })
@@ -229,9 +229,9 @@ class TestArtifactEventIntegration:
             f"Host: 127.0.0.1:{port}\r\n"
             f"Authorization: Bearer test-secret\r\n"
             f"Content-Type: application/json\r\n"
-            f"Content-Length: {len(json.dumps({'jsonrpc': '2.0', 'method': 'tasks/sendSubscribe', 'params': {'taskId': task_id}, 'id': 1}))}\r\n"
+            f"Content-Length: {len(json.dumps({'jsonrpc': '2.0', 'method': 'SubscribeToTask', 'params': {'taskId': task_id}, 'id': 1}))}\r\n"
             f"\r\n"
-            + json.dumps({"jsonrpc": "2.0", "method": "tasks/sendSubscribe", "params": {"taskId": task_id}, "id": 1})
+            + json.dumps({"jsonrpc": "2.0", "method": "SubscribeToTask", "params": {"taskId": task_id}, "id": 1})
         )
         sock.sendall(req_text.encode())
 
@@ -265,7 +265,7 @@ class TestArtifactEventIntegration:
         evt = emit_artifact_event(
             task_id=task_id,
             context_id=task_id,
-            artifact={"parts": [{"type": "text", "text": "integration test artifact"}], "index": 0},
+            artifact={"parts": [{"text": "integration test artifact"}], "index": 0},
             metadata={"index": 0},
         )
         streamer.push_event(stream_id, evt)

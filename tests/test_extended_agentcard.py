@@ -1,51 +1,49 @@
-"""Tests for ExtendedAgentCard dataclasses and build_extended_agent_card()."""
+"""Tests for spec-compliant ExtendedAgentCard dataclasses and build_extended_agent_card()."""
 
 import pytest
 from hermes_agent_a2a.a2a_spec import (
-    Provider,
-    Skill,
+    AgentProvider,
+    AgentSkill,
     AgentCapabilities,
+    AgentInterface,
     ExtendedAgentCard,
     build_extended_agent_card,
 )
 
 
-class TestProvider:
-    def test_provider_required_organization(self) -> None:
-        p = Provider(organization="Hermes Fleet")
+class TestAgentProvider:
+    def test_provider_required_fields(self) -> None:
+        p = AgentProvider(url="https://hermes.fleet", organization="Hermes Fleet")
+        assert p.url == "https://hermes.fleet"
         assert p.organization == "Hermes Fleet"
-        assert p.url is None
-
-    def test_provider_with_url(self) -> None:
-        p = Provider(organization="Acme Corp", url="https://acme.com")
-        assert p.organization == "Acme Corp"
-        assert p.url == "https://acme.com"
-
-    def test_provider_repr(self) -> None:
-        p = Provider(organization="Test Org", url="https://test.com")
-        assert "Test Org" in repr(p)
-        assert "https://test.com" in repr(p)
 
 
-class TestSkill:
-    def test_skill_required_id_and_name(self) -> None:
-        s = Skill(id="code_review", name="Code Review")
+class TestAgentSkill:
+    def test_skill_required_fields(self) -> None:
+        s = AgentSkill(
+            id="code_review",
+            name="Code Review",
+            description="Reviews code",
+            tags=["dev"],
+        )
         assert s.id == "code_review"
         assert s.name == "Code Review"
-        assert s.description is None
-        assert s.tags is None
+        assert s.description == "Reviews code"
+        assert s.tags == ["dev"]
 
-    def test_skill_with_optional_fields(self) -> None:
-        s = Skill(
+    def test_skill_optional_fields(self) -> None:
+        s = AgentSkill(
             id="data_analysis",
             name="Data Analysis",
             description="Analyze datasets",
             tags=["ml", "analytics"],
+            examples=["example1"],
+            input_modes=["text", "json"],
+            output_modes=["text"],
         )
-        assert s.id == "data_analysis"
-        assert s.name == "Data Analysis"
-        assert s.description == "Analyze datasets"
-        assert s.tags == ["ml", "analytics"]
+        assert s.examples == ["example1"]
+        assert s.input_modes == ["text", "json"]
+        assert s.output_modes == ["text"]
 
 
 class TestAgentCapabilities:
@@ -64,43 +62,69 @@ class TestAgentCapabilities:
         assert caps.extended_agent_card is True
 
 
+class TestAgentInterface:
+    def test_required_fields(self) -> None:
+        iface = AgentInterface(
+            url="https://agent.example.com/a2a",
+            protocol_binding="https://a2aproject.github.io/A2A/spec",
+            protocol_version="1.0.0",
+        )
+        assert iface.url == "https://agent.example.com/a2a"
+        assert iface.protocol_binding == "https://a2aproject.github.io/A2A/spec"
+        assert iface.protocol_version == "1.0.0"
+
+    def test_optional_tenant(self) -> None:
+        iface = AgentInterface(
+            url="https://agent.example.com/a2a",
+            protocol_binding="https://a2aproject.github.io/A2A/spec",
+            protocol_version="1.0.0",
+            tenant="acme",
+        )
+        assert iface.tenant == "acme"
+
+
 class TestExtendedAgentCard:
     def test_required_fields(self) -> None:
         card = ExtendedAgentCard(
             name="Test Agent",
             description="A test agent",
-            provider=Provider(organization="Test Org"),
+            provider=AgentProvider(url="https://test.fleet", organization="Test Org"),
             capabilities=AgentCapabilities(),
             default_input_modes=["text"],
             default_output_modes=["text"],
         )
         assert card.name == "Test Agent"
         assert card.description == "A test agent"
-        assert isinstance(card.provider, Provider)
+        assert isinstance(card.provider, AgentProvider)
         assert isinstance(card.capabilities, AgentCapabilities)
         assert card.default_input_modes == ["text"]
         assert card.default_output_modes == ["text"]
-        assert card.skills is None
-        assert card.url is None
-        assert card.version is None
-        assert card.documentation_url is None
 
-    def test_skills_optional(self) -> None:
+    def test_skills_and_interfaces_optional(self) -> None:
         card = ExtendedAgentCard(
             name="Skilled Agent",
             description="Agent with skills",
-            provider=Provider(organization="Fleet"),
+            provider=AgentProvider(url="https://fleet.fleet", organization="Fleet"),
             capabilities=AgentCapabilities(streaming=True),
             default_input_modes=["text", "image"],
             default_output_modes=["text"],
+            supported_interfaces=[
+                AgentInterface(
+                    url="https://agent.example.com/a2a",
+                    protocol_binding="https://a2aproject.github.io/A2A/spec",
+                    protocol_version="1.0.0",
+                )
+            ],
             skills=[
-                Skill(id="code", name="Code Assistant", tags=["dev"]),
-                Skill(id="docs", name="Docs Assistant"),
+                AgentSkill(id="code", name="Code Assistant", description="Helps with code", tags=["dev"]),
+                AgentSkill(id="docs", name="Docs Assistant", description="Helps with docs", tags=["writing"]),
             ],
         )
         assert len(card.skills) == 2
         assert card.skills[0].id == "code"
         assert card.skills[1].name == "Docs Assistant"
+        assert len(card.supported_interfaces) == 1
+        assert card.supported_interfaces[0].url == "https://agent.example.com/a2a"
 
 
 class TestBuildExtendedAgentCard:
@@ -120,7 +144,7 @@ class TestBuildExtendedAgentCard:
     def test_provider_defaults(self) -> None:
         card = build_extended_agent_card()
         assert card["provider"]["organization"] == "Hermes Fleet"
-        assert "url" in card["provider"]
+        assert card["provider"]["url"] == "https://hermes.fleet"
 
     def test_capabilities_defaults(self) -> None:
         card = build_extended_agent_card()
@@ -139,12 +163,12 @@ class TestBuildExtendedAgentCard:
         card = build_extended_agent_card(
             overrides={
                 "name": "Override Name",
-                "provider": {"organization": "Custom Org", "url": "https://custom.com"},
+                "provider": {"organization": "Custom Org", "url": "https://custom.fleet"},
             }
         )
         assert card["name"] == "Override Name"
         assert card["provider"]["organization"] == "Custom Org"
-        assert card["provider"]["url"] == "https://custom.com"
+        assert card["provider"]["url"] == "https://custom.fleet"
 
     def test_overrides_preserve_defaults(self) -> None:
         card = build_extended_agent_card(overrides={"description": "Custom desc"})
@@ -161,10 +185,16 @@ class TestBuildExtendedAgentCard:
         card = build_extended_agent_card(
             overrides={
                 "skills": [
-                    {"id": "test", "name": "Test Skill", "description": "A test skill"}
+                    {
+                        "id": "test",
+                        "name": "Test Skill",
+                        "description": "A test skill",
+                        "tags": ["testing"],
+                    }
                 ]
             }
         )
         assert len(card["skills"]) == 1
         assert card["skills"][0]["id"] == "test"
         assert card["skills"][0]["name"] == "Test Skill"
+        assert card["skills"][0]["tags"] == ["testing"]
