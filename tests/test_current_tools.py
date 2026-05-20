@@ -854,7 +854,7 @@ def test_a2a_metrics_command_enabled(monkeypatch):
     assert "📊 A2A Metrics" in result["response"]
     assert "⏱️ Uptime:" in result["response"]
     assert "🔗 Webhook" in result["response"]
-    assert "📋 Tasks" in result["response"]
+    assert "📨 Tasks" in result["response"]
     assert "📬 Queue" in result["response"]
 
 
