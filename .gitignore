@@ -5,3 +5,8 @@ __pycache__/
 *.bak-*
 dist/
 dispatch/
+
+# Vault: only template files (test-vault.yaml) should be committed
+# Real vault configs (identity.yaml, vault.yaml) must NEVER be committed
+vault/*.yaml
+!vault/test-vault.yaml
