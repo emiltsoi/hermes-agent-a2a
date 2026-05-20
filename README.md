@@ -188,65 +188,86 @@ a2a_cancel_protocol_task(task_id="local-task-123")
 
 When called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess. When `name` or `url` is provided, it also sends a standard A2A `tasks/cancel` to the remote agent. The result includes `local_canceled` indicating whether local cancellation succeeded.
 
-## Hermes session routing requirement
+## The Mesh: Session-Aware Fleet Messaging
 
-`a2a_send_session_message` is a one-way Hermes session relay. It posts webhook text to the target Hermes agent; the target agent's `config.yaml` must route inbound webhook text into the desired platform/session.
+This is the main thing that makes Hermes fleets different from standard A2A.
 
-Target profiles need plugin/toolset activation plus gateway webhook/session routing:
+**Standard A2A is orchestration:** one agent delegates a task to another, gets a result back, continues. The relationship is client → worker. Context doesn't persist between turns.
 
-```yaml
-toolsets:
-  - a2a
+**Hermes mesh is teamwork:** agents hold conversations across sessions, preserve full sender context (platform, chat, thread, identity), and reply into the correct place without either side needing to know the other's infrastructure topology. Britney can ask Linda a question mid-dispatch and get a threaded reply back in the same conversation.
 
-plugins:
-  enabled:
-    - hermes-agent-a2a
+`a2a_send_session_message` is the mesh bridge. The envelope carries the sender's full identity context — which platform, which chat, which user, which thread — so the recipient's LLM sees exactly who asked and can respond correctly. The reply routes back through the mesh automatically.
+
+This is not a webhook relay. It's a session-to-session handoff where the envelope does the routing work.
+
+**What this enables:**
+- Agents that work as a team, not just a delegation chain
+- Cross-fleet coordination without either side needing to know internal topology
+- Thread-preserving conversations between agents that outlive a single task
+- Mesh discipline: domain routing, reply accountability, full context preserved
+
+**Google A2A compatibility** is also built in — the plugin speaks standard A2A JSON-RPC for external agent onboarding. But the mesh session relay is what you can't get elsewhere.
+
+---
+
+### Mesh Discipline: The CTA Protocol
+
+Every `a2a_send_session_message` carries a **CTA** (Call To Action) that tells the recipient what to do with it:
+
+| Field | Values | Meaning |
+|-------|--------|---------|
+| `action` | `do` \| `info` | `do`: act on this message. `info`: log/acknowledge only |
+| `reply` | `yes` \| `no` | `yes`: sender expects a reply. `no`: fire-and-forget |
+
+**Combinations:**
+- `action=do + reply=yes`: take action, then reply with result
+- `action=do + reply=no`: act on it, no reply needed
+- `action=info + reply=yes`: acknowledge and reply when done processing
+- `action=info + reply=no`: acknowledge only, no reply needed
+
+**Reply rule:** All A2A replies use `a2a_send_session_message` back to the originating peer — not a plain Telegram DM or platform DM. Plain DMs break thread continuity. The mesh handles the return path.
+
+**Agent prompt for mesh discipline:**
+
+> When you receive an A2A message:
+> 1. Read the CTA — `action` tells you what to do, `reply` tells you whether to respond
+> 2. If `reply=yes`: respond via `a2a_send_session_message` back to the sender, using the same message ID as a reference (`ref` field)
+> 3. Never reply via plain Telegram DM or platform DM — always route through the mesh so the reply carries your full context and reaches the correct thread
+> 4. If you need to route the message to another agent first (wrong domain), do so immediately — don't hold it
+> 5. If the CTA is ambiguous, reply=yes is the safe default
+
+**Example — Britney dispatches to Linda:**
+
+```python
+a2a_send_session_message(
+    message="Linda, review PR #123 before I merge. Link: https://github.com/...",
+    agent="linda",
+    action="do",
+    reply="yes"
+)
+# Linda's session receives it attributed to Britney.
+# Linda's reply routes back through the mesh to Britney's session.
 ```
 
-The target identity also needs a webhook transport so peers know where to deliver:
+**Example — Linda acknowledges without replying:**
 
-```yaml
-transports:
-  hermes_webhook:
-    url: https://target.example/hermes/webhook
-    auth:
-      type: hmac
-      secret_env: TARGET_HERMES_WEBHOOK_SECRET
+```python
+a2a_send_session_message(
+    message="Routing to Britney — she owns SWE dispatch.",
+    agent="britney",
+    action="info",
+    reply="no"
+)
+# Britney receives the update; Linda has already forwarded.
 ```
 
-Telegram-backed session routing example:
+---
 
-```yaml
-platforms:
-  webhook:
-    enabled: true
-    extra:
-      host: 0.0.0.0
-      port: 8644
-      secret: ${TARGET_HERMES_WEBHOOK_SECRET}
-      routes:
-        a2a_trigger:
-          secret: ${TARGET_HERMES_WEBHOOK_SECRET}
-          prompt: "{text}"
-          deliver: telegram
-          deliver_extra:
-            chat_id: "<TELEGRAM_CHAT_ID>"
-          target_session: "telegram:dm:<TELEGRAM_CHAT_ID>"
-          source:
-            platform: telegram
-            chat_type: dm
-            chat_id: "<TELEGRAM_CHAT_ID>"
-            user_id: "<TELEGRAM_USER_ID>"
-            user_name: "<TELEGRAM_DISPLAY_NAME>"
-```
-
-Without this routing, `a2a_send_session_message` may reach the webhook but not land in the intended Hermes session. The tool returns `state=completed`, `delivery=delivered`, `reply_expected=false`, and Hermes metadata with `route=session`, `delivery=one_way`. Use `a2a_send_protocol_task` when you need a pollable A2A task result.
-
-### Hermes gateway compatibility
+### Hermes Gateway Compatibility
 
 > **⚠️ Mode 4 (session relay) requires gateway patches**
 
-The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches that are not present in the standard public `hermes-agent` codebase. Modes 1-3 (protocol tasks, local/remote workers) are self-contained and work without any gateway patches.
+The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches that are not present in the standard public `hermes-agent` codebase. Modes 1–3 (protocol tasks, local/remote workers) are self-contained and work without any gateway patches.
 
 **Mode 4 requires these gateway patches:**
 
@@ -260,7 +281,7 @@ The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches tha
 
 The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and sender-side Telegram visibility echo. The gateway should only provide generic authenticated webhook-to-session routing.
 
-### Recommended cleanup path for Hermes core patches
+### Recommended Cleanup Path for Hermes Core Patches
 
 The clean long-term split is:
 
