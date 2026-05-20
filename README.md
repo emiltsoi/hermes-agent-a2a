@@ -37,18 +37,23 @@ The plugin registers the `a2a` toolset with these tools:
 
 ## Install
 
-### Clone into Hermes plugins
+### From PyPI (recommended)
+
+```bash
+python3 -m pip install hermes-agent-a2a
+```
+
+### From source
 
 ```bash
 git clone https://github.com/emiltsoi/hermes-agent-a2a.git ~/.hermes/plugins/hermes-agent-a2a
 python3 -m pip install -e ~/.hermes/plugins/hermes-agent-a2a
 ```
 
-### Or run the installer
+For development or custom branch installs, use the installer script:
 
 ```bash
-INSTALL_REPO_URL=https://github.com/emiltsoi/hermes-agent-a2a.git \
-  bash <(curl -sSL https://raw.githubusercontent.com/emiltsoi/hermes-agent-a2a/main/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/emiltsoi/hermes-agent-a2a/main/install.sh)
 ```
 
 ## Profile configuration

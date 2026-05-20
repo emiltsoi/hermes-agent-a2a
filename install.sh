@@ -1,4 +1,11 @@
 #!/bin/bash
+# ============================================================
+# Hermes A2A Plugin Installer
+#
+# NOTE: For most users, `pip install hermes-agent-a2a` is
+# recommended. This script is for development/customization
+# installs (editable source, custom branches, etc.).
+# ============================================================
 set -e
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
