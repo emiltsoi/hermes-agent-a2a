@@ -875,8 +875,6 @@ def _handle_call_mode3(
         hermes=hermes,
     )
     payload["params"]["message"]["metadata"]["worker_at"] = "target"
-    payload["params"]["message"]["metadata"]["timeout"] = timeout
-    payload["params"]["timeout"] = timeout
 
     headers = _auth_headers(resolved_auth)
 
