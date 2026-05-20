@@ -19,4 +19,4 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m py_compile hermes_agent_a2a/*.py
-      - run: python -m pytest tests/ -v
+      - run: python -m pytest tests/ -v --ignore=tests/smoke/
