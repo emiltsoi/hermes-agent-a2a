@@ -556,6 +556,118 @@ class TestCORS:
         assert "Access-Control-Allow-Origin" in dict(req.headers) or True, \
             "Error responses should include CORS headers"
 
+    def test_options_message_stream_returns_post_options(self, fresh_server):
+        """OPTIONS /message:stream must return POST, OPTIONS in Access-Control-Allow-Methods."""
+        server, port = fresh_server
+
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/message:stream",
+            headers={
+                "Origin": "http://example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Content-Type, Authorization",
+            },
+            method="OPTIONS",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                hdrs = dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            hdrs = dict(e.headers)
+
+        assert "Access-Control-Allow-Methods" in hdrs, \
+            f"/message:stream OPTIONS must have Access-Control-Allow-Methods: {hdrs}"
+        assert "POST" in hdrs.get("Access-Control-Allow-Methods", ""), \
+            f"POST must be allowed for /message:stream: {hdrs.get('Access-Control-Allow-Methods')}"
+
+    def test_options_message_stream_has_a2a_version_header(self, fresh_server):
+        """OPTIONS /message:stream must include A2A-Version header."""
+        server, port = fresh_server
+
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/message:stream",
+            headers={
+                "Origin": "http://example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+            method="OPTIONS",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                hdrs = dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            hdrs = dict(e.headers)
+
+        assert "A2A-Version" in hdrs, \
+            f"/message:stream OPTIONS must have A2A-Version: {hdrs}"
+
+
+class TestPushUnsubscribe:
+    """Test push notification unsubscribe via REST DELETE."""
+
+    def test_rest_delete_push_config_returns_204(self, fresh_server):
+        """DELETE /tasks/{id}/pushNotificationConfigs/{config_id} must return 204 on success."""
+        server, port = fresh_server
+
+        # First create a push config
+        task_id = "push-unsub-rest-test"
+        _rpc_request(port, _make_task_send_body(task_id, "hello"))
+
+        import urllib.request
+        create_body = {
+            "url": "https://example.com/callback",
+            "hmacKey": "secret-key-123",
+        }
+        hdrs = {"Content-Type": "application/json", "Authorization": "Bearer test-secret"}
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/tasks/{task_id}/pushNotificationConfigs",
+            data=json.dumps(create_body).encode(),
+            headers=hdrs,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            create_result = json.loads(resp.read().decode())
+
+        # Extract config_id from response
+        config_id = (create_result.get("config") or {}).get("id") or \
+                     create_result.get("subscriptionId") or \
+                     create_result.get("configId") or \
+                     "test-config-id"
+
+        # Now delete it
+        del_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/tasks/{task_id}/pushNotificationConfigs/{config_id}",
+            headers={"Authorization": "Bearer test-secret"},
+            method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(del_req, timeout=5) as resp:
+                assert resp.status == 204, f"Delete must return 204: {resp.status}"
+        except urllib.error.HTTPError as e:
+            # 204 should not raise, but handle just in case
+            assert e.code == 204, f"Delete must return 204: {e.code}"
+
+    def test_rest_delete_push_config_unknown_returns_404(self, fresh_server):
+        """DELETE /tasks/{id}/pushNotificationConfigs/{unknown_id} must return 404."""
+        server, port = fresh_server
+
+        task_id = "push-unsub-unknown"
+        _rpc_request(port, _make_task_send_body(task_id, "hello"))
+
+        import urllib.request
+        del_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/tasks/{task_id}/pushNotificationConfigs/unknown-config-id",
+            headers={"Authorization": "Bearer test-secret"},
+            method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(del_req, timeout=5) as resp:
+                assert resp.status == 404, f"Delete unknown config must return 404: {resp.status}"
+        except urllib.error.HTTPError as e:
+            assert e.code == 404, f"Delete unknown config must return 404: {e.code}"
+
 
 # ---------------------------------------------------------------------------
 # 6. TASK STATE MACHINE FIXES (F-A001, F-F005, F-C002)
