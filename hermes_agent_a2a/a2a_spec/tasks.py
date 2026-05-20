@@ -120,7 +120,7 @@ def build_task_get_payload(task_id: str, request_id: Optional[str] = None) -> di
     return {
         "jsonrpc": "2.0",
         "id": request_id or str(uuid.uuid4()),
-        "method": "tasks/get",
+        "method": "GetTask",
         "params": {"id": task_id},
     }
 
@@ -129,7 +129,7 @@ def build_task_cancel_payload(task_id: str, request_id: Optional[str] = None) ->
     return {
         "jsonrpc": "2.0",
         "id": request_id or str(uuid.uuid4()),
-        "method": "tasks/cancel",
+        "method": "CancelTask",
         "params": {"id": task_id},
     }
 

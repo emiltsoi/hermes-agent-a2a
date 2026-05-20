@@ -220,7 +220,7 @@ def test_cancel_protocol_task_posts_tasks_cancel():
     assert result["local_canceled"] is False
     mock_cancel.assert_called_once_with("task-1")
     payload = http.call_args.kwargs["json_body"]
-    assert payload["method"] == "tasks/cancel"
+    assert payload["method"] == "CancelTask"
     assert payload["params"]["id"] == "task-1"
 
 
@@ -306,7 +306,7 @@ def test_a2a_spec_parses_artifacts_status_message_and_cancel_payload():
     assert build_task_cancel_payload("task-1", request_id="rpc-cancel") == {
         "jsonrpc": "2.0",
         "id": "rpc-cancel",
-        "method": "tasks/cancel",
+        "method": "CancelTask",
         "params": {"id": "task-1"},
     }
 
