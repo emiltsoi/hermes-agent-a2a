@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.3] - 2026-05-20
+
+### Bug Fixes
+- **handle_get_metrics signature**: Executor passes implicit `task_id` kwarg — handler now accepts `args=None, **kwargs` to absorb both the args dict and executor kwargs without TypeError
+- **a2a_metrics command registration**: `register_command` now includes `handler=_handle_a2a_metrics_command` argument; handler function added to tool_handlers.py
+
+### Internal
+- Added `_handle_a2a_metrics_command()` Telegram slash command handler for /a2a_metrics
+
 ## [3.2.2] - 2026-05-20
 
 ### Security Fixes

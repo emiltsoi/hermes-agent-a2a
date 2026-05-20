@@ -1382,12 +1382,18 @@ def _format_metrics_for_telegram(metrics: dict) -> str:
         f"✅ Success: {webhook.get('successes', 0)} ({webhook.get('success_rate_percent', 0):.2f}%)",
         f"❌ Failed: {webhook.get('failures', 0)}",
         "",
-        "📋 Tasks",
+        "📨 Tasks",
         f"Received: {tasks.get('received', 0)}",
         f"Completed: {tasks.get('completed', 0)}",
-        f"Canceled: {tasks.get('canceled', 0)}",
         f"Failed: {tasks.get('failed', 0)}",
+        f"Canceled: {tasks.get('canceled', 0)}",
         "",
         f"📬 Queue: {queue.get('pending_count', 0)} pending",
     ]
     return "\n".join(lines)
+
+
+def _handle_a2a_metrics_command(raw_args: str) -> str | None:
+    """Telegram slash command handler for /a2a_metrics."""
+    metrics = handle_get_metrics()
+    return _format_metrics_for_telegram(metrics)

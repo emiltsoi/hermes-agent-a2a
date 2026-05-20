@@ -97,9 +97,14 @@ class HermesAgentA2APlugin:
         logger.info("[HermesA2A] Phase 3 tools registered")
 
         # Register /a2a_metrics as a Telegram slash command if env var is set
-        if os.getenv("A2A_METRICS_COMMAND_ENABLED", "false").lower() == "true":
+        _env_val = os.getenv("A2A_METRICS_COMMAND_ENABLED", "false")
+        logger.info("[HermesA2A] A2A_METRICS_COMMAND_ENABLED=%s", _env_val)
+        if _env_val.lower() == "true":
+            from .tool_handlers import _handle_a2a_metrics_command
+            logger.info("[HermesA2A] Registering a2a_metrics command...")
             registry.register_command(
                 "a2a_metrics",
+                handler=_handle_a2a_metrics_command,
                 description="Get A2A plugin metrics (uptime, webhook stats, task counts)",
                 args_hint="",
             )
