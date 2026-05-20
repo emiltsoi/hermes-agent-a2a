@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.2] - 2026-05-20
+
+### Security Fixes
+- **SEC-01: DNS timeout**: `socket.setdefaulttimeout(5.0)` added before `gethostbyname` in `is_safe_url` — prevents indefinite blocking on malicious DNS
+- **SEC-02: Container auth bypass**: Localhost bypass now gated on `A2A_REQUIRE_AUTH=true` — loopback is not isolated in containers/shared namespaces
+- **SEC-06: HMAC required on push config**: `_check_hmac_push(required=True)` — push subscription config now requires valid HMAC
+
+### Documentation
+- Description updated to reflect Hermes-specific A2A HTTP/JSON-RPC implementation
+- `.gitignore` updated to exclude `dispatch/`
+
 ## [3.2.1] - 2026-05-19
 
 ### Bug Fixes (CRITICAL/HIGH from CODE_REVIEW.md)
