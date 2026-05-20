@@ -36,12 +36,24 @@ class TestWorkerRegistrySubprocessLifecycle:
         with _lock:
             for task_id in list(_processes.keys()):
                 proc = _processes.get(task_id)
-                if proc is not None and proc.poll() is None:
-                    proc.terminate()
+                if proc is not None:
                     try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                        poll = proc.poll()
+                    except Exception:
+                        _processes.pop(task_id, None)
+                        continue
+                    if poll is None:
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=1)
+                        except StopIteration:
+                            # Mock side_effect exhausted in teardown — ignore
+                            pass
+                        except Exception:
+                            # Mock wait not properly implemented
+                            pass
                 _processes.pop(task_id, None)
 
     def test_register_worker_adds_process_to_registry(self):
@@ -200,12 +212,24 @@ class TestMode3WorkerSubprocessTimeout:
         with _lock:
             for task_id in list(_processes.keys()):
                 proc = _processes.get(task_id)
-                if proc is not None and proc.poll() is None:
-                    proc.terminate()
+                if proc is not None:
                     try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                        poll = proc.poll()
+                    except Exception:
+                        _processes.pop(task_id, None)
+                        continue
+                    if poll is None:
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=1)
+                        except StopIteration:
+                            # Mock side_effect exhausted in teardown — ignore
+                            pass
+                        except Exception:
+                            # Mock wait not properly implemented
+                            pass
                 _processes.pop(task_id, None)
 
     def test_mode3_worker_times_out_after_configured_timeout(self):
@@ -275,12 +299,24 @@ class TestMode3WorkerNonZeroExit:
         with _lock:
             for task_id in list(_processes.keys()):
                 proc = _processes.get(task_id)
-                if proc is not None and proc.poll() is None:
-                    proc.terminate()
+                if proc is not None:
                     try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                        poll = proc.poll()
+                    except Exception:
+                        _processes.pop(task_id, None)
+                        continue
+                    if poll is None:
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=1)
+                        except StopIteration:
+                            # Mock side_effect exhausted in teardown — ignore
+                            pass
+                        except Exception:
+                            # Mock wait not properly implemented
+                            pass
                 _processes.pop(task_id, None)
 
     def test_mode3_worker_non_zero_exit_returns_failed_state(self):
@@ -366,12 +402,24 @@ class TestMode2WorkerSubprocess:
         with _lock:
             for task_id in list(_processes.keys()):
                 proc = _processes.get(task_id)
-                if proc is not None and proc.poll() is None:
-                    proc.terminate()
+                if proc is not None:
                     try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                        poll = proc.poll()
+                    except Exception:
+                        _processes.pop(task_id, None)
+                        continue
+                    if poll is None:
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=1)
+                        except StopIteration:
+                            # Mock side_effect exhausted in teardown — ignore
+                            pass
+                        except Exception:
+                            # Mock wait not properly implemented
+                            pass
                 _processes.pop(task_id, None)
 
     def test_mode2_worker_non_zero_exit_returns_error(self):
