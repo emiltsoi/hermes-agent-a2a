@@ -303,17 +303,17 @@ Common variables:
 |---|---|
 | `A2A_METRICS_LOG_ENABLED` | Set `true` to enable periodic metrics logging. Defaults to `false`. |
 | `A2A_METRICS_LOG_INTERVAL` | Interval in seconds between metrics log entries. Defaults to `300` (5 minutes). |
-| `A2A_METRICS_COMMAND_ENABLED` | Set `true` to enable `/a2a_metrics` Telegram slash command. Defaults to `false`. |
+| `A2A_METRICS_COMMAND_ENABLED` | Set `true` to enable the `/a2a_metrics` (or `/a2a-metrics`) Telegram slash command. Defaults to `false`. |
 
-**Using the `/a2a_metrics` Telegram command:**
+**Using the `/a2a_metrics` (or `/a2a-metrics`) Telegram command:**
 
-To enable the `/a2a_metrics` command, set the environment variable:
+To enable the metrics command, set the environment variable:
 
 ```bash
 export A2A_METRICS_COMMAND_ENABLED=true
 ```
 
-Then restart the Hermes gateway. Once enabled, send `/a2a_metrics` via Telegram to get formatted metrics:
+Then restart the Hermes gateway. Once enabled, send `/a2a_metrics` or `/a2a-metrics` via Telegram to get formatted metrics:
 
 ```
 📊 A2A Metrics
@@ -334,7 +334,7 @@ Failed: 3
 📬 Queue: 0 pending
 ```
 
-The command is detected by the webhook route and returns metrics directly without processing as a normal message.
+Both command forms work — `/a2a_metrics` and `/a2a-metrics` — due to gateway-side normalization.
 
 ## Architecture
 
