@@ -34,6 +34,7 @@ def test_registers_current_a2a_tools():
         "a2a_help",
         "a2a_discover",
         "a2a_list",
+        "a2a_announce",
         "a2a_send_protocol_task",
         "a2a_cancel_protocol_task",
         "a2a_run_local_agent_task",
@@ -1775,3 +1776,111 @@ def test_cr1_webhook_url_valid_internet_url_passes_ssrf(tmp_path, monkeypatch):
     assert mock_resp.read.called, f"Expected HTTP delivery after SSRF pass, got: {result}"
 
 
+# ----------------------------------------------------------------------
+# a2a_announce tests
+# ----------------------------------------------------------------------
+
+
+def test_announce_returns_false_when_registry_not_configured(monkeypatch):
+    """a2a_announce must return announced=False when A2A_REGISTRY_URL is not set."""
+    monkeypatch.delenv("A2A_REGISTRY_URL", raising=False)
+    monkeypatch.delenv("A2A_REGISTRY_AUTH_TOKEN", raising=False)
+
+    result = tools.handle_announce()
+
+    assert result.get("announced") is False
+    assert "not configured" in result.get("reason", "")
+
+
+def test_announce_returns_false_when_server_not_running(monkeypatch):
+    """a2a_announce must return an error when A2A server is not available."""
+    monkeypatch.setenv("A2A_REGISTRY_URL", "http://registry:8081/announce")
+    monkeypatch.delenv("A2A_REGISTRY_AUTH_TOKEN", raising=False)
+
+    with patch.object(tools, "_ensure_server", return_value=None):
+        result = tools.handle_announce()
+
+    assert result.get("announced") is False
+    assert "not running" in result.get("error", "")
+
+
+def test_announce_posts_agent_card_to_registry(monkeypatch):
+    """a2a_announce must POST the AgentCard to the registry URL."""
+    monkeypatch.setenv("A2A_REGISTRY_URL", "http://registry:8081/announce")
+    monkeypatch.delenv("A2A_REGISTRY_AUTH_TOKEN", raising=False)
+
+    fake_card = {
+        "name": "test-agent",
+        "url": "http://test-agent:8081",
+        "protocolVersion": "1.0",
+        "capabilities": {"streaming": True},
+        "skills": [],
+    }
+    mock_server = MagicMock()
+    mock_server.build_agent_card.return_value = fake_card
+
+    registry_response = {"status": "ok", "agent": "test-agent"}
+
+    with patch.object(tools, "_ensure_server", return_value=mock_server):
+        with patch.object(tools, "_http_request", return_value=registry_response) as mock_http:
+            result = tools.handle_announce()
+
+    assert result.get("announced") is True
+    assert result.get("agent_card", {}).get("name") == "test-agent"
+    assert result.get("registry_response", {}).get("status") == "ok"
+    mock_http.assert_called_once()
+    call_args = mock_http.call_args
+    assert call_args[0][0] == "POST"
+    assert "registry:8081/announce" in call_args[0][1]
+
+
+def test_announce_includes_auth_token_from_env(monkeypatch):
+    """a2a_announce must include Authorization header when A2A_REGISTRY_AUTH_TOKEN is set."""
+    monkeypatch.setenv("A2A_REGISTRY_URL", "http://registry:8081/announce")
+    monkeypatch.setenv("A2A_REGISTRY_AUTH_TOKEN", "secret-token")
+
+    fake_card = {"name": "test-agent", "url": "http://test-agent:8081"}
+    mock_server = MagicMock()
+    mock_server.build_agent_card.return_value = fake_card
+
+    with patch.object(tools, "_ensure_server", return_value=mock_server):
+        with patch.object(tools, "_http_request", return_value={"status": "ok"}) as mock_http:
+            tools.handle_announce()
+
+    call_args = mock_http.call_args
+    headers = call_args[1].get("headers", {})
+    assert headers.get("Authorization") == "Bearer secret-token"
+
+
+def test_announce_handles_connection_error(monkeypatch):
+    """a2a_announce must return an error on connection failure."""
+    monkeypatch.setenv("A2A_REGISTRY_URL", "http://unreachable:8081/announce")
+    monkeypatch.delenv("A2A_REGISTRY_AUTH_TOKEN", raising=False)
+
+    fake_card = {"name": "test-agent"}
+    mock_server = MagicMock()
+    mock_server.build_agent_card.return_value = fake_card
+
+    with patch.object(tools, "_ensure_server", return_value=mock_server):
+        with patch.object(tools, "_http_request", side_effect=ConnectionError("Cannot connect")):
+            result = tools.handle_announce()
+
+    assert result.get("announced") is False
+    assert "Cannot connect" in result.get("error", "")
+
+
+def test_announce_url_param_overrides_env_var(monkeypatch):
+    """Passing url parameter must override A2A_REGISTRY_URL env var."""
+    monkeypatch.setenv("A2A_REGISTRY_URL", "http://default-registry:8081/announce")
+    monkeypatch.delenv("A2A_REGISTRY_AUTH_TOKEN", raising=False)
+
+    fake_card = {"name": "test-agent"}
+    mock_server = MagicMock()
+    mock_server.build_agent_card.return_value = fake_card
+
+    with patch.object(tools, "_ensure_server", return_value=mock_server):
+        with patch.object(tools, "_http_request", return_value={"status": "ok"}) as mock_http:
+            tools.handle_announce(url="http://custom-registry:9091/register")
+
+    call_args = mock_http.call_args
+    assert "custom-registry:9091" in call_args[0][1]

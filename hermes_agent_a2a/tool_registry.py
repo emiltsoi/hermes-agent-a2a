@@ -5,6 +5,7 @@ import logging
 from . import schemas
 from .tool_handlers import (
     _dict_args_handler,
+    handle_announce,
     handle_cancel_protocol_task,
     handle_discover,
     handle_get_metrics,
@@ -39,6 +40,12 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         toolset="a2a",
         schema=schemas.A2A_LIST,
         handler=_dict_args_handler(handle_list),
+    )
+    registry.register_tool(
+        name=schemas.A2A_ANNOUNCE["name"],
+        toolset="a2a",
+        schema=schemas.A2A_ANNOUNCE,
+        handler=_dict_args_handler(handle_announce),
     )
     registry.register_tool(
         name=schemas.A2A_CALL["name"],

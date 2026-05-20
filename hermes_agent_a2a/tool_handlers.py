@@ -657,6 +657,70 @@ def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None) 
 
 
 # ----------------------------------------------------------------------
+# Tool: announce
+# ----------------------------------------------------------------------
+
+
+def handle_announce(
+    url: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    auth_header: Optional[str] = None,
+    auth_value: Optional[str] = None,
+    task_id: Optional[str] = None,
+    user_task: Optional[str] = None,
+) -> dict:
+    """Announce this agent to a shared A2A registry.
+
+    Reads registry URL from A2A_REGISTRY_URL env var by default.
+    Builds the local AgentCard and POSTs it to the registry.
+
+    Returns success with the registry response, or an error dict.
+    """
+    registry_url = url or os.environ.get("A2A_REGISTRY_URL", "")
+    if not registry_url:
+        return {
+            "announced": False,
+            "reason": "A2A_REGISTRY_URL is not configured",
+            "hint": "Set A2A_REGISTRY_URL env var or pass 'url' parameter",
+        }
+
+    # Build local agent card via server callback
+    try:
+        server = _ensure_server()
+        if server is None:
+            return {"announced": False, "error": "A2A server not running"}
+        agent_card = server.build_agent_card()
+    except Exception as e:
+        return {"announced": False, "error": f"Failed to build AgentCard: {e}"}
+
+    # Resolve auth: explicit params override env var
+    token = auth_token or os.environ.get("A2A_REGISTRY_AUTH_TOKEN", "")
+    resolved_auth = _direct_auth(token if token else None, auth_type, auth_header, auth_value)
+    headers = _auth_headers(resolved_auth)
+
+    try:
+        result = _http_request(
+            "POST",
+            registry_url.rstrip("/"),
+            json_body=agent_card,
+            headers=headers,
+            timeout=15,
+        )
+        return {
+            "announced": True,
+            "agent_card": agent_card,
+            "registry_response": result,
+        }
+    except TimeoutError as e:
+        return {"announced": False, "error": f"Announcement timed out: {e}"}
+    except ConnectionError as e:
+        return {"announced": False, "error": f"Cannot connect to registry: {e}"}
+    except Exception as e:
+        return {"announced": False, "error": f"Announcement failed: {e}"}
+
+
+# ----------------------------------------------------------------------
 # Mode 2: ephemeral worker on caller machine
 # ----------------------------------------------------------------------
 

@@ -287,6 +287,43 @@ A2A_LIST = {
     },
 }
 
+A2A_ANNOUNCE = {
+    "name": "a2a_announce",
+    "description": (
+        "Announce this agent to a shared A2A registry so other agents can discover it. "
+        "The registry URL is read from A2A_REGISTRY_URL (env var) by default; "
+        "pass 'url' to override per-call. "
+        "Announces the agent's full Agent Card including name, URL, capabilities, and skills. "
+        "Use a2a_list to verify the announcement succeeded."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Registry URL override (defaults to A2A_REGISTRY_URL env var)",
+            },
+            "auth_token": {
+                "type": "string",
+                "description": "Bearer token for the registry (defaults to A2A_REGISTRY_AUTH_TOKEN env var)",
+            },
+            "auth_type": {
+                "type": "string",
+                "enum": ["none", "bearer", "api_key", "custom_header"],
+                "description": "Auth type for registry (defaults to bearer)",
+            },
+            "auth_header": {
+                "type": "string",
+                "description": "Header name for api_key/custom_header auth",
+            },
+            "auth_value": {
+                "type": "string",
+                "description": "Secret value for api_key/custom_header auth",
+            },
+        },
+    },
+}
+
 A2A_TELEGRAM = {
     "name": "a2a_send_session_message",
     "description": (
