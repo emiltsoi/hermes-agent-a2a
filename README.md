@@ -7,13 +7,13 @@
 | Capability | Tools / Files | Purpose |
 |---|---|---|
 | Agent discovery | `a2a_discover` | Fetch an Agent Card by registry name or direct URL. Can auto-register external agents. |
-| Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `tasks/send` and poll `tasks/get`. |
+| Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `SendMessage` and poll `GetTask`. |
 | Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker with Hermes A2A metadata. |
 | Hermes remote workers | `a2a_run_remote_agent_task` | Ask a remote Hermes A2A server to run its own ephemeral worker. |
 | Session relay | `a2a_send_session_message` | ⚠️ Requires Hermes gateway patches — see [README § Hermes gateway compatibility](#hermes-gateway-compatibility) |
 | Metrics | `a2a_get_metrics` | Get current A2A plugin metrics (uptime, webhook stats, task counts, queue depth). |
-| SSE streaming | `tasks/sendSubscribe` | Stream task state transitions via Server-Sent Events. Agent Card: `streaming: true`. |
-| Push notifications | `tasks/pushNotification/subscribe` | Register webhook URL for push delivery on task state changes. HMAC-SHA256 signed. Agent Card: `pushNotifications: true`. |
+| SSE streaming | `SubscribeToTask` | Stream task state transitions via Server-Sent Events. Agent Card: `streaming: true`. |
+| Push notifications | `POST /tasks/{id}/pushNotificationConfigs` | Register webhook URL for push delivery on task state changes. HMAC-SHA256 signed. Agent Card: `pushNotifications: true`. |
 | Registry | `~/.hermes/fleet/a2a/agents/<name>/identity.yaml` | Stores transport URLs and auth metadata. |
 | Help | `a2a_help` | In-band help for protocol, workers, sessions, external agents, security, and troubleshooting. |
 
@@ -33,7 +33,7 @@ The plugin registers the `a2a` toolset with these tools:
 
 `a2a_send_session_message` is intentionally one-way: it delivers into the target Hermes session/gateway and returns an A2A-shaped delivery ACK, not a semantic reply. Use `a2a_send_protocol_task` when you need a pollable A2A task response.
 
-`a2a_cancel_protocol_task` sends standard A2A `tasks/cancel` when `name` or `url` is provided. If called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess.
+`a2a_cancel_protocol_task` sends standard A2A `CancelTask` when `name` or `url` is provided. If called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess.
 
 ## Install
 
@@ -191,7 +191,7 @@ For local Hermes worker subprocesses:
 a2a_cancel_protocol_task(task_id="local-task-123")
 ```
 
-When called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess. When `name` or `url` is provided, it also sends a standard A2A `tasks/cancel` to the remote agent. The result includes `local_canceled` indicating whether local cancellation succeeded.
+When called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess. When `name` or `url` is provided, it also sends a standard A2A `CancelTask` to the remote agent. The result includes `local_canceled` indicating whether local cancellation succeeded.
 
 ## The Mesh: Session-Aware Fleet Messaging
 
@@ -389,14 +389,20 @@ python3 -m pytest
 
 ```text
 hermes_agent_a2a/
-  plugin.py       # plugin registration and server lifecycle
-  server.py       # inbound A2A JSON-RPC server
-  tools.py        # outbound tool handlers
-  identity.py     # identity registry and transport normalization
-  hooks.py        # Hermes gateway/LLM hooks
-  security.py     # inbound filtering, redaction, audit, rate limiting
-  persistence.py  # exchange persistence
-  validators.py   # config validation helpers
+  plugin.py           # plugin registration and server lifecycle
+  server.py           # inbound A2A JSON-RPC server
+  tools.py            # outbound tool handlers
+  identity.py         # identity registry and transport normalization
+  hooks.py            # Hermes gateway/LLM hooks
+  security.py         # inbound filtering, redaction, audit, rate limiting
+  persistence.py       # exchange persistence
+  validators.py       # config validation helpers
+  a2a_spec/
+    __init__.py       # spec models re-export
+    agent_card.py     # AgentCard, AgentProvider, AgentSkill, AgentCapabilities, AgentInterface
+    tasks.py          # TaskState, SendMessageConfiguration, role enum, payload builders
+    push.py           # push notification config models
+    hermes_ext.py     # Hermes metadata extensions
 templates/
   agent-config.yaml
 ```

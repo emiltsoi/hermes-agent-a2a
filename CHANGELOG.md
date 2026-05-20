@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.9] - 2026-05-21
+
+### Spec Compliance — Final Polish
+
+- **Spec method names throughout**: All JSON-RPC calls now use `SendMessage`, `GetTask`, `CancelTask`, `SubscribeToTask` per a2a.proto v1.0 spec
+- **A2A-Version header**: All responses include `A2A-Version: 1.0` header; `A2A-Extensions` absent when not configured
+- **SendMessageConfiguration**: `return_immediately` and `accepted_output_modes` accepted without error
+- **Backward compatibility aliases removed**: `tasks/send`, `tasks/get`, `tasks/cancel`, `tasks/sendSubscribe`, `tasks/pushNotification/subscribe` no longer accepted — clean spec v1.0 only
+
+### Tests
+
+- 540 tests passing (smoke tests excluded — require live fleet agents)
+
+## [3.2.8] - 2026-05-20
+
+### Spec Compliance — Agent Card & Push Models
+
+- **Provider → AgentProvider**: `url` now required field per a2a.proto:396-403
+- **Skill → AgentSkill**: `description` and `tags` now required; `examples`, `input_modes`, `output_modes` added per a2a.proto:430-447
+- **AgentCapabilities fields renamed**: `pushNotifications` → `push_notifications`; `stateTransitionHistory` removed; `extensions` and `extended_agent_card` added per spec
+- **AgentInterface added**: url + protocol_binding + protocol_version per a2a.proto:336-350
+- **ExtendedAgentCard field renames**: `defaultInputModes` → `default_input_modes`, `defaultOutputModes` → `default_output_modes`, `documentationUrl` → `documentation_url`
+- **Push model field renames**: `endpoint` → `url`, `auth_type` → `scheme`, `auth_code` → `credentials` per a2a.proto:325-332, 464-478
+- **Push REST endpoints**: `POST /tasks/{id}/pushNotificationConfigs` returns 201 with `configId`; DELETE returns 204 with empty body
+- **ListTasksResponse**: now returns `{tasks: [], next_page_token, page_size, total_size}` per spec
+
+### Spec Compliance — Task State
+
+- **TaskState.rejected added** as canonical terminal state per a2a.proto:187-208
+- **AUTH_STATES updated**: `authenticated` removed (auth sub-state, not canonical)
+- **TERMINAL_STATES updated**: `rejected` included as terminal auth state
+
+### Spec Compliance — SSE & Streaming
+
+- **REST SSE endpoint**: `POST /message:stream` (colon convention) per spec REST conventions
+- **Artifact event structure**: `TaskArtifactUpdateEvent.to_dict()` now returns `artifact_update` discriminator per StreamResponse oneof pattern
+
+## [3.2.7] - 2026-05-20
+
+### Spec Compliance — Core Message Format
+
+- **Role field as integer**: `message.role` is now `Role.ROLE_USER = 1` (int), not string `"user"` per a2a.proto:245-252
+- **SendMessage params.id removed**: per spec, `id` belongs in the JSON-RPC envelope, not inside `params`
+- **Parts structure**: `parts` is now `[{"text": "..."}]` without `{"type": "text", "text": "..."}` wrapper — spec oneof pattern
+- **parse_task_result**: task envelope unwrapping fixed — accesses `data.task` not `data`
+
+## [3.2.6] - 2026-05-20
+
+### Spec Compliance — Critical Interop
+
+- **SendMessage routing**: Server now accepts `SendMessage` as valid method name (was only `tasks/send`)
+- **A2A-Version header added**: All JSON-RPC responses include `A2A-Version: 1.0`
+
+## [3.2.5] - 2026-05-20
+
+### Bug Fixes
+
+- **SendMessage JSON-RPC method**: Named correctly in outbound requests (was `tasks/send`)
+- **A2A-Version header**: Added to all responses for standards-compliant agents
+
+## [3.2.4] - 2026-05-20
+
+### Bug Fixes
+
+- **GetTask and CancelTask PascalCase**: JSON-RPC method names corrected to `GetTask` and `CancelTask` per a2a.proto v1.0
+
 ## [3.2.3] - 2026-05-20
 
 ### Bug Fixes
