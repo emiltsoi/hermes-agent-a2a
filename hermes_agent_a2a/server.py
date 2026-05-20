@@ -78,6 +78,16 @@ except Exception:
     HERMES_VERSION = "0.0.0"
     logger.warning("[A2A] Failed to import hermes_cli.__version, using fallback '0.0.0'. hermes_cli may be misinstalled.")
 
+# A2A protocol version and extensions per Section 3.2.6
+A2A_VERSION = "1.0"
+# Comma-separated extension URIs; set via A2A_EXTENSIONS env var
+_A2A_EXTENSIONS_ENV = os.getenv("A2A_EXTENSIONS", "")
+
+
+def _get_a2a_extensions() -> str:
+    """Return A2A-Extensions header value (comma-separated URIs or empty string)."""
+    return _A2A_EXTENSIONS_ENV.strip()
+
 
 class _PendingTask:
     __slots__ = ("task_id", "text", "metadata", "response", "ready", "created_at", "context_id")
@@ -625,8 +635,7 @@ def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:
 def _build_task_list_item(task: "_PendingTask", state: str) -> dict:
     """Build a single task item dict for ListTasks responses."""
     item = {
-        "id": task.task_id,  # backward-compat alias
-        "task_id": task.task_id,
+        "id": task.task_id,
         "context_id": task.context_id or task.task_id,
         "status": {
             "state": state,
@@ -731,10 +740,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # A2A protocol headers per Section 3.2.6
+        self.send_header("A2A-Version", A2A_VERSION)
+        extensions = _get_a2a_extensions()
+        if extensions:
+            self.send_header("A2A-Extensions", extensions)
         # CORS headers on all A2A responses (browser-accessible agents)
         self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
         self.end_headers()
         self.wfile.write(body)
 
@@ -752,7 +766,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", allowed)
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
+        self.send_header("A2A-Version", A2A_VERSION)
+        extensions = _get_a2a_extensions()
+        if extensions:
+            self.send_header("A2A-Extensions", extensions)
         self.end_headers()
 
     def _check_auth(self) -> bool:
@@ -1005,9 +1023,14 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # the TCP connection so urllib.request.urlopen.read() returns after data.
         self.close_connection = True
         self.send_header("X-Stream-Id", stream_id)
+        # A2A protocol headers per Section 3.2.6
+        self.send_header("A2A-Version", A2A_VERSION)
+        extensions = _get_a2a_extensions()
+        if extensions:
+            self.send_header("A2A-Extensions", extensions)
         self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
         self.end_headers()
 
         def _send_line(line: str) -> bool:
@@ -1131,10 +1154,20 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def _handle_task_send(self, params: dict, rpc_id) -> dict:
         task_id = params.get("id", str(uuid.uuid4()))
         message = params.get("message", {})
+        configuration = params.get("configuration", {})
+
+        # Extract SendMessageConfiguration fields per a2a.proto:143-161
+        return_immediately = configuration.get("return_immediately", False)
+        accepted_output_modes = configuration.get("accepted_output_modes")
+        push_config = configuration.get("task_push_notification_config")
+        history_length = configuration.get("history_length")
+
+        if push_config:
+            logger.debug("[A2A] SendMessageConfiguration task_push_notification_config not yet implemented for local tasks")
 
         text_parts = []
         for part in message.get("parts", []):
-            if part.get("type") == "text":
+            if "text" in part:
                 text_parts.append(part.get("text", ""))
         user_text = "\n".join(text_parts)
 
@@ -1245,6 +1278,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             ))
 
         threading.Thread(target=_run_async_webhook, daemon=True).start()
+
+        # Per SendMessageConfiguration.return_immediately (a2a.proto:143-161):
+        # If True, return immediately without waiting for task completion.
+        if return_immediately:
+            return {
+                "id": task_id,
+                "status": {"state": "working"},
+                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
+            }
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 
@@ -1447,9 +1489,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if method in ("tasks/send", "SendMessage"):
+        if method == "SendMessage":
             result = self._handle_task_send(params, rpc_id)
-        elif method in ("tasks/get", "GetTask"):
+        elif method == "GetTask":
             tid = params.get("id", "")
             status = _ensure_task_queue().get_status(tid)
             if status["state"] == "unknown":
@@ -1465,7 +1507,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             result = {"id": tid, "status": {"state": status["state"]}}
             if status.get("response"):
                 result["artifacts"] = [{"parts": [{"text": filter_outbound(status["response"])}], "index": 0}]
-                # Emit TaskArtifactUpdateEvent over SSE for tasks/get polling responses
+                # Emit TaskArtifactUpdateEvent over SSE for GetTask polling responses
                 try:
                     from .sse_handler import emit_artifact_event, get_sse_streamer
                     streamer = get_sse_streamer()
@@ -1484,7 +1526,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                                 streamer.push_event(sid, evt)
                 except Exception:
                     pass  # SSE delivery is best-effort
-        elif method in ("tasks/cancel", "CancelTask"):
+        elif method == "CancelTask":
             tid = params.get("id", "")
             from .worker_registry import cancel_worker
             status = _ensure_task_queue().get_status(tid)
@@ -1511,32 +1553,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             worker_canceled = cancel_worker(tid)
             _ensure_task_queue().cancel(tid)
             result = {"id": tid, "status": {"state": "canceled"}, "metadata": {"hermes": {"worker_canceled": worker_canceled}}}
-        elif method == "tasks/pushNotification/subscribe":
-            tid = params.get("taskId", "")
-            webhook_url = params.get("url", "") or params.get("webhookUrl", "")
-            hmac_key = params.get("hmacKey", "") or params.get("hmac_key", "")
-            subscription_id = params.get("subscriptionId", "")
-            if subscription_id:
-                result = self._handle_push_unsubscribe(params, rpc_id)
-            elif tid and webhook_url and hmac_key:
-                result = self._handle_push_subscribe(params, rpc_id)
-            else:
-                self._send_json(
-                    {
-                        "jsonrpc": "2.0",
-                        "error": {"code": -32600, "message": "Invalid Request: missing required params for pushNotification/subscribe", "data": None},
-                        "id": rpc_id,
-                    },
-                    400,
-                )
-                return
-        elif method == "tasks/pushNotification":
-            subscription_id = params.get("subscriptionId", "")
-            result = self._handle_push_unsubscribe(params, rpc_id)
-        elif method in ("tasks/sendSubscribe", "SubscribeToTask"):
+        elif method == "SubscribeToTask":
             self._handle_send_subscribe(params, rpc_id)
             return
-        elif method in ("tasks/list", "ListTasks"):
+        elif method == "ListTasks":
             page_size = min(max(int(params.get("pageSize", 20)), 1), 100)
             token = params.get("continuationToken")
             result = _build_paginated_task_list(page_size, token)
@@ -1703,7 +1723,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         message = body.get("message", {})
         text_parts = []
         for part in message.get("parts", []):
-            if part.get("type") == "text":
+            if "text" in part:
                 text_parts.append(part.get("text", ""))
         user_text = "\n".join(text_parts)
 
@@ -1819,7 +1839,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         message = body.get("message", {})
         text_parts = []
         for part in message.get("parts", []):
-            if part.get("type") == "text":
+            if "text" in part:
                 text_parts.append(part.get("text", ""))
         user_text = "\n".join(text_parts)
 

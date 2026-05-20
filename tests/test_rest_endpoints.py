@@ -34,16 +34,16 @@ def _rpc_request(port, payload, auth_token="test-secret"):
 
 
 def _make_task_send_body(task_id, text="hello"):
-    """Build a tasks/send JSON-RPC body."""
+    """Build a SendMessage JSON-RPC body per spec."""
     return {
         "jsonrpc": "2.0",
         "id": "1",
-        "method": "tasks/send",
+        "method": "SendMessage",
         "params": {
             "id": task_id,
             "message": {
                 "role": "user",
-                "parts": [{"type": "text", "text": text}],
+                "parts": [{"text": text}],
                 "metadata": {},
             },
         },
@@ -610,31 +610,31 @@ class TestGetExtendedAgentCard:
 # ---------------------------------------------------------------------------
 
 class TestRESTCoexistsWithJSONRPC:
-    """Verify JSON-RPC endpoints still work alongside new REST endpoints."""
+    """Verify JSON-RPC endpoints work with spec-compliant method names."""
 
-    def test_json_rpc_tasks_send_still_works(self, fresh_server):
-        """Existing JSON-RPC tasks/send must still work."""
+    def test_json_rpc_send_message_works(self, fresh_server):
+        """JSON-RPC SendMessage must work."""
         server, port = fresh_server
 
-        result, status = _rpc_request(port, _make_task_send_body("jsonrpc-still-works-1"))
+        result, status = _rpc_request(port, _make_task_send_body("json-rpc-send-1"))
         assert "error" not in result or result["error"].get("code") != -32601, \
-            f"JSON-RPC tasks/send must still work: {result}"
+            f"JSON-RPC SendMessage must work: {result}"
 
-    def test_json_rpc_tasks_get_still_works(self, fresh_server):
-        """Existing JSON-RPC tasks/get must still work."""
+    def test_json_rpc_get_task_works(self, fresh_server):
+        """JSON-RPC GetTask must work."""
         server, port = fresh_server
 
-        task_id = "jsonrpc-get-task-1"
+        task_id = "json-rpc-get-task-1"
         _rpc_request(port, _make_task_send_body(task_id, "hello"))
 
         body = {
             "jsonrpc": "2.0",
             "id": "1",
-            "method": "tasks/get",
+            "method": "GetTask",
             "params": {"id": task_id},
         }
         result, _ = _rpc_request(port, body)
-        assert "error" not in result, f"JSON-RPC tasks/get must still work: {result}"
+        assert "error" not in result, f"JSON-RPC GetTask must work: {result}"
 
     def test_health_endpoint_still_works(self, fresh_server):
         """GET /health must still return 200."""

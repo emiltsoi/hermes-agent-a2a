@@ -9,13 +9,11 @@ from .agent_card import (
     build_extended_agent_card,
     skill_names,
     validate_skill,
-    # Legacy aliases (DEPRECATED)
-    Provider,
-    Skill,
 )
 from .hermes_ext import build_hermes_metadata
 from .tasks import (
     TERMINAL_STATES,
+    SendMessageConfiguration,
     build_task_cancel_payload,
     build_task_get_payload,
     build_task_send_payload,
@@ -40,6 +38,7 @@ from .push import (
 
 __all__ = [
     "TERMINAL_STATES",
+    "SendMessageConfiguration",
     "build_hermes_metadata",
     "build_task_cancel_payload",
     "build_task_get_payload",
@@ -48,7 +47,7 @@ __all__ = [
     "is_terminal_state",
     "parse_json_rpc_error",
     "parse_task_result",
-    # Agent Card models (spec-compliant)
+    # Agent Card models
     "AgentProvider",
     "AgentSkill",
     "AgentCapabilities",
@@ -57,10 +56,7 @@ __all__ = [
     "build_extended_agent_card",
     "skill_names",
     "validate_skill",
-    # Legacy Agent Card models (DEPRECATED)
-    "Provider",
-    "Skill",
-    # Push notification models (T1-1a)
+    # Push notification models
     "AuthenticationInfo",
     "TaskPushNotificationConfig",
     "TaskPushNotificationConfigList",

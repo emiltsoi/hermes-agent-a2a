@@ -64,6 +64,25 @@ class TaskArtifactUpdateEvent:
         }
 
 
+@dataclass
+class SendMessageConfiguration:
+    """SendMessageConfiguration per a2a.proto:143-161.
+
+    Allows the caller to configure output modes, push notifications,
+    history length, and blocking behavior for a SendMessage call.
+
+    Attributes:
+        accepted_output_modes: List of accepted output modes (e.g., ["text", "data"]).
+        task_push_notification_config: Optional push notification config for this task.
+        history_length: Optional number of previous messages to include.
+        return_immediately: If True, return immediately without waiting for completion.
+    """
+    accepted_output_modes: Optional[list[str]] = None
+    task_push_notification_config: Optional[dict] = None
+    history_length: Optional[int] = None
+    return_immediately: Optional[bool] = None
+
+
 # ---------------------------------------------------------------------------
 # Enums — spec-compliant per a2a.proto
 # ---------------------------------------------------------------------------

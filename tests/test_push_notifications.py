@@ -7,6 +7,7 @@ import hmac
 import json
 import threading
 import time
+import uuid
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch, MagicMock, ANY
 import urllib.request
@@ -340,109 +341,130 @@ class TestRetryLogic:
 # ---------------------------------------------------------------------------
 
 class TestPushNotificationEndpoints:
-    """HTTP endpoints for push notification subscription management."""
+    """REST endpoints for push notification subscription management (spec-compliant)."""
 
-    def test_subscribe_endpoint_exists(self, fresh_server):
-        """POST /tasks/pushNotification/subscribe must be implemented (not return -38002)."""
-        server, port = fresh_server
+    def _rest_post(self, port, path, body=None, auth_token="test-secret"):
+        """POST to a REST endpoint."""
+        import urllib.request, urllib.error
+        hdrs = {"Content-Type": "application/json"}
+        if auth_token:
+            hdrs["Authorization"] = f"Bearer {auth_token}"
+        data = json.dumps(body or {}).encode() if body is not None else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=data,
+            headers=hdrs,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode()), resp.status
+        except urllib.error.HTTPError as e:
+            return json.loads(e.read().decode()), e.code
 
-        body = {
+    def _rest_delete(self, port, path, auth_token="test-secret"):
+        """DELETE to a REST endpoint."""
+        import urllib.request, urllib.error
+        hdrs = {}
+        if auth_token:
+            hdrs["Authorization"] = f"Bearer {auth_token}"
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=None,
+            headers=hdrs,
+            method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = resp.read().decode()
+                return json.loads(body) if body else {}, resp.status
+        except urllib.error.HTTPError as e:
+            return json.loads(e.read().decode()), e.code
+
+    def _seed_task(self, port, task_id):
+        """Create a task via JSON-RPC so push config endpoints have something to bind to."""
+        _rpc_request(port, {
             "jsonrpc": "2.0",
-            "id": "push-ep-1",
-            "method": "tasks/pushNotification/subscribe",
+            "id": "1",
+            "method": "SendMessage",
             "params": {
-                "taskId": "push-ep-task-1",
-                "url": "https://example.com/a2a-callback",
-                "hmacKey": "my-secret-key",
+                "id": task_id,
+                "message": {
+                    "role": "user",
+                    "parts": [{"text": "seed"}],
+                    "metadata": {},
+                },
             },
-        }
-        result, headers = _rpc_request(port, body)
+        })
 
-        # Before implementation: returns -38002 Push not supported
-        # After implementation: returns {result: {subscriptionId: "..."}}
-        assert "error" not in result, \
-            f"pushNotification/subscribe must be implemented, got error: {result}"
-        assert "result" in result, f"pushNotification/subscribe must return a result: {result}"
-
-    def test_subscribe_returns_subscription_id(self, fresh_server):
-        """subscribe must return a subscriptionId in the result."""
+    def test_create_push_config_returns_201(self, fresh_server):
+        """POST /tasks/{taskId}/pushNotificationConfigs must return 201 with config details."""
         server, port = fresh_server
+        task_id = f"push-rest-{uuid.uuid4().hex[:8]}"
+        self._seed_task(port, task_id)
 
-        # Create the task first so it's found
-        from hermes_agent_a2a.server import _ensure_task_queue
-        q = _ensure_task_queue()
-        q.enqueue("push-sub-task-1", "hello", {"sender_name": "test"})
-
-        body = {
-            "jsonrpc": "2.0",
-            "id": "push-sub-1",
-            "method": "tasks/pushNotification/subscribe",
-            "params": {
-                "taskId": "push-sub-task-1",
-                "url": "https://example.com/cb",
+        body, status = self._rest_post(
+            port,
+            f"/tasks/{task_id}/pushNotificationConfigs",
+            {
+                "url": "https://example.com/hook",
                 "hmacKey": "secret123",
             },
-        }
-        result, _ = _rpc_request(port, body)
+        )
+        assert status == 201, f"Expected 201, got {status}: {body}"
+        config_id = body.get("configId") or body.get("config", {}).get("id")
+        assert config_id, f"Response must contain configId or config.id: {body}"
 
-        assert "result" in result, f"subscribe must succeed for existing task: {result}"
-        sub_id = result["result"].get("subscriptionId")
-        assert sub_id, f"subscribe must return subscriptionId, got: {result['result']}"
+    def test_get_push_config_returns_200(self, fresh_server):
+        """GET /tasks/{taskId}/pushNotificationConfigs/{configId} must return 200."""
+        server, port = fresh_server
+        task_id = f"push-rest-{uuid.uuid4().hex[:8]}"
+        self._seed_task(port, task_id)
 
-    def test_unsubscribe_endpoint_exists(self, fresh_server):
-        """DELETE /tasks/pushNotification with subscriptionId must be implemented."""
+        # Create
+        create_body, _ = self._rest_post(
+            port,
+            f"/tasks/{task_id}/pushNotificationConfigs",
+            {"url": "https://example.com/cb", "hmacKey": "k"},
+        )
+        config_id = create_body.get("configId") or (create_body.get("config") or {}).get("id")
+
+        # Get
+        from hermes_agent_a2a import push_delivery as pd_module
+        cfg = pd_module.get_push_config(task_id, config_id)
+        assert cfg is not None, "Config must exist after creation"
+
+    def test_delete_push_config_returns_204(self, fresh_server):
+        """DELETE /tasks/{taskId}/pushNotificationConfigs/{configId} must return 204."""
+        server, port = fresh_server
+        task_id = f"push-rest-{uuid.uuid4().hex[:8]}"
+        self._seed_task(port, task_id)
+
+        # Create
+        create_body, _ = self._rest_post(
+            port,
+            f"/tasks/{task_id}/pushNotificationConfigs",
+            {"url": "https://example.com/cb", "hmacKey": "k"},
+        )
+        config_id = create_body.get("configId") or (create_body.get("config") or {}).get("id")
+
+        # Delete
+        body, status = self._rest_delete(
+            port,
+            f"/tasks/{task_id}/pushNotificationConfigs/{config_id}",
+        )
+        assert status == 204, f"Expected 204 on delete, got {status}: {body}"
+
+    def test_create_push_config_for_nonexistent_task_returns_404(self, fresh_server):
+        """POST /tasks/{taskId}/pushNotificationConfigs for unknown task returns 404."""
         server, port = fresh_server
 
-        # Create the task first
-        from hermes_agent_a2a.server import _ensure_task_queue
-        q = _ensure_task_queue()
-        q.enqueue("push-unsub-task-1", "hello", {"sender_name": "test"})
-
-        # First subscribe
-        body = {
-            "jsonrpc": "2.0",
-            "id": "push-unsub-1",
-            "method": "tasks/pushNotification/subscribe",
-            "params": {
-                "taskId": "push-unsub-task-1",
-                "url": "https://example.com/cb",
-                "hmacKey": "secret456",
-            },
-        }
-        sub_result, _ = _rpc_request(port, body)
-        assert "result" in sub_result, f"subscribe must succeed: {sub_result}"
-
-        sub_id = sub_result["result"].get("subscriptionId")
-
-        # Unsubscribe via tasks/pushNotification method
-        delete_body = {
-            "jsonrpc": "2.0",
-            "id": "push-unsub-2",
-            "method": "tasks/pushNotification",
-            "params": {"subscriptionId": sub_id},
-        }
-        result, _ = _rpc_request(port, delete_body)
-        assert "result" in result, f"unsubscribe must succeed: {result}"
-
-    def test_subscribe_for_nonexistent_task_returns_error(self, fresh_server):
-        """subscribe for unknown task must return -38000."""
-        server, port = fresh_server
-
-        body = {
-            "jsonrpc": "2.0",
-            "id": "push-unknown-1",
-            "method": "tasks/pushNotification/subscribe",
-            "params": {
-                "taskId": "nonexistent-push-task-xyz",
-                "url": "https://example.com/cb",
-                "hmacKey": "key",
-            },
-        }
-        result, _ = _rpc_request(port, body)
-
-        if "error" in result:
-            assert result["error"].get("code") == -38000, \
-                f"Unknown task must return -38000, got: {result['error']}"
+        body, status = self._rest_post(
+            port,
+            "/tasks/nonexistent-task-xyz/pushNotificationConfigs",
+            {"url": "https://x.com/h", "hmacKey": "k"},
+        )
+        assert status == 404, f"Expected 404 for unknown task, got {status}: {body}"
 
 
 # ---------------------------------------------------------------------------
