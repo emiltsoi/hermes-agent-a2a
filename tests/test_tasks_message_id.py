@@ -60,3 +60,14 @@ class TestBuildTaskSendPayloadMessageId:
         assert id1 != id2, (
             f"Each call must produce a unique message_id; got duplicate: {id1}"
         )
+
+    def test_params_has_id_equal_to_task_id(self):
+        """params.id must be the task_id per SendMessageRequest proto."""
+        payload = build_task_send_payload(
+            task_id="my-task-id-123",
+            message="hello",
+            sender_name="test-sender",
+        )
+        assert payload["params"]["id"] == "my-task-id-123", (
+            f"params.id must be task_id; got: {payload['params'].get('id')}"
+        )

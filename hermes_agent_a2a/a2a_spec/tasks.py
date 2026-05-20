@@ -174,6 +174,7 @@ def build_task_send_payload(
         "id": request_id or str(uuid.uuid4()),
         "method": "SendMessage",
         "params": {
+            "id": task_id,
             "message": {
                 "message_id": str(uuid.uuid4()),
                 "role": Role.ROLE_USER,
