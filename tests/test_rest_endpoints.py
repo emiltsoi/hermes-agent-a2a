@@ -649,3 +649,134 @@ class TestRESTCoexistsWithJSONRPC:
 
         body, status = _rest_get(port, "/.well-known/agent.json")
         assert status == 200, f"Agent card endpoint must still work: {body}"
+
+
+class TestA2AProtocolHeaders:
+    """Test A2A-Version and A2A-Extensions headers per Section 3.2.6."""
+
+    def test_a2a_version_header_present(self, fresh_server):
+        """All JSON-RPC responses must include A2A-Version header."""
+        server, port = fresh_server
+
+        task_id = "header-test-1"
+        _rpc_request(port, _make_task_send_body(task_id, "hello"))
+
+        # GET the task and check headers
+        import urllib.request
+        hdrs = {"Authorization": "Bearer test-secret"}
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/tasks/{task_id}",
+            headers=hdrs,
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert "A2A-Version" in dict(resp.headers), \
+                f"A2A-Version header must be present: {dict(resp.headers)}"
+            assert resp.headers["A2A-Version"] == "1.0", \
+                f"A2A-Version must be 1.0: {resp.headers['A2A-Version']}"
+
+    def test_a2a_extensions_header_absent_when_not_configured(self, fresh_server):
+        """A2A-Extensions header must be absent when A2A_EXTENSIONS env is not set."""
+        server, port = fresh_server
+
+        task_id = "header-test-2"
+        _rpc_request(port, _make_task_send_body(task_id, "hello"))
+
+        import urllib.request
+        hdrs = {"Authorization": "Bearer test-secret"}
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/tasks/{task_id}",
+            headers=hdrs,
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert "A2A-Extensions" not in dict(resp.headers), \
+                f"A2A-Extensions header must not be present when not configured: {dict(resp.headers)}"
+
+
+class TestSendMessageConfiguration:
+    """Test SendMessageConfiguration handling per a2a.proto:143-161."""
+
+    def test_send_message_with_return_immediately_true(self, fresh_server):
+        """SendMessage with return_immediately=True must return immediately without waiting."""
+        server, port = fresh_server
+
+        task_id = "return-immediately-test"
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "SendMessage",
+            "params": {
+                "id": task_id,
+                "message": {
+                    "role": "user",
+                    "parts": [{"text": "hello"}],
+                    "metadata": {},
+                },
+                "configuration": {
+                    "return_immediately": True,
+                },
+            },
+        }
+
+        import urllib.request, urllib.error
+        body = json.dumps(payload).encode()
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer test-secret"}
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/a2a",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+
+        import time
+        start = time.time()
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+            elapsed = time.time() - start
+
+        # Should return quickly (not wait for _RESPONSE_TIMEOUT=120s)
+        assert elapsed < 5, f"return_immediately=True should return quickly, took {elapsed}s"
+        assert "result" in result
+        assert result["result"]["id"] == task_id
+        assert result["result"]["status"]["state"] == "working", \
+            f"Expected 'working' state when return_immediately=True: {result}"
+
+    def test_send_message_with_accepted_output_modes(self, fresh_server):
+        """SendMessage with accepted_output_modes in configuration is accepted."""
+        server, port = fresh_server
+
+        task_id = "output-modes-test"
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "SendMessage",
+            "params": {
+                "id": task_id,
+                "message": {
+                    "role": "user",
+                    "parts": [{"text": "hello"}],
+                    "metadata": {},
+                },
+                "configuration": {
+                    "accepted_output_modes": ["text"],
+                },
+            },
+        }
+
+        import urllib.request
+        body = json.dumps(payload).encode()
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer test-secret"}
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/a2a",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+
+        # Should not error on accepted_output_modes
+        assert "error" not in result or result.get("error", {}).get("code") != -32600, \
+            f"accepted_output_modes should not cause error: {result}"
