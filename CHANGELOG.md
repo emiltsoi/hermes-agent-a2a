@@ -2,18 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.10] - 2026-05-21
+
+### Documentation
+
+- **README updated**: All method names corrected to a2a.proto v1.0 spec — `SendMessage`, `GetTask`, `CancelTask`, `SubscribeToTask`; push notification endpoint now `POST /tasks/{id}/pushNotificationConfigs`; `a2a_spec/` module added to repository layout
+- **CHANGELOG filled**: v3.2.4 through v3.2.9 backfilled to document the full spec compliance series
+
 ## [3.2.9] - 2026-05-21
-
-### Spec Compliance — Final Polish
-
-- **Spec method names throughout**: All JSON-RPC calls now use `SendMessage`, `GetTask`, `CancelTask`, `SubscribeToTask` per a2a.proto v1.0 spec
-- **A2A-Version header**: All responses include `A2A-Version: 1.0` header; `A2A-Extensions` absent when not configured
-- **SendMessageConfiguration**: `return_immediately` and `accepted_output_modes` accepted without error
-- **Backward compatibility aliases removed**: `tasks/send`, `tasks/get`, `tasks/cancel`, `tasks/sendSubscribe`, `tasks/pushNotification/subscribe` no longer accepted — clean spec v1.0 only
-
-### Tests
-
-- 540 tests passing (smoke tests excluded — require live fleet agents)
 
 ## [3.2.8] - 2026-05-20
 
