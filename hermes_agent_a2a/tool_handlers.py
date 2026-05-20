@@ -1394,6 +1394,6 @@ def _format_metrics_for_telegram(metrics: dict) -> str:
 
 
 def _handle_a2a_metrics_command(raw_args: str) -> str | None:
-    """Telegram slash command handler for /a2a_metrics."""
+    """Telegram slash command handler for /a2a-metrics."""
     metrics = handle_get_metrics()
     return _format_metrics_for_telegram(metrics)
