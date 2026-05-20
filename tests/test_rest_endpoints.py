@@ -161,7 +161,7 @@ class TestGetTask:
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_get_task_returns_task_object(self, fresh_server):
-        """GET /tasks/{id} must return a Task-like object with id and status."""
+        """GET /tasks/{id} must return {task: Task} per proto SendMessageResponse."""
         server, port = fresh_server
 
         task_id = "rest-get-task-2"
@@ -169,9 +169,10 @@ class TestGetTask:
 
         body, status = _rest_get(port, f"/tasks/{task_id}")
         assert status == 200
-        assert "id" in body, f"Task object must have 'id': {body}"
-        assert "status" in body, f"Task object must have 'status': {body}"
-        assert "state" in body["status"], f"status must have 'state': {body}"
+        task = body.get("task", {})
+        assert "id" in task, f"Task object must have 'id': {body}"
+        assert "status" in task, f"Task object must have 'status': {body}"
+        assert "state" in task["status"], f"status must have 'state': {body}"
 
     def test_get_task_returns_404_for_unknown_task(self, fresh_server):
         """GET /tasks/{id} must return 404 for unknown task."""
@@ -189,8 +190,9 @@ class TestGetTask:
 
         body, status = _rest_get(port, f"/tasks/{task_id}")
         assert status == 200
+        task = body.get("task", {})
         # Task should have either status.state == completed (with artifacts) or working
-        assert body["status"]["state"] in ("completed", "working", "submitted"), \
+        assert task["status"]["state"] in ("completed", "working", "submitted"), \
             f"Task should be completed, working, or submitted: {body}"
 
 
@@ -209,14 +211,14 @@ class TestListTasks:
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_list_tasks_returns_tasks_array(self, fresh_server):
-        """GET /tasks must return an object with tasks array field."""
+        """GET /tasks must return an object with task array field (proto: repeated Task task)."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        # Response must have tasks, next_page_token, page_size, total_size
-        assert "tasks" in body, f"Response must have 'tasks' field: {body}"
-        assert isinstance(body["tasks"], list), f"'tasks' must be a list: {body}"
+        # Response must have task (proto field name), next_page_token, page_size, total_size
+        assert "task" in body, f"Response must have 'task' field: {body}"
+        assert isinstance(body["task"], list), f"'task' must be a list: {body}"
 
     def test_list_tasks_includes_created_tasks(self, fresh_server):
         """GET /tasks must include tasks that were created."""
@@ -226,7 +228,7 @@ class TestListTasks:
         _rpc_request(port, _make_task_send_body(task_id, "hello"))
 
         body, status = _rest_get(port, "/tasks")
-        task_ids = [t.get("id") for t in body.get("tasks", [])]
+        task_ids = [t.get("id") for t in body.get("task", [])]
         assert task_id in task_ids, f"Created task {task_id} must appear in task list: {task_ids}"
 
     def test_list_tasks_pagination_params(self, fresh_server):
@@ -277,7 +279,8 @@ class TestCancelTask:
 
         body, status = _rest_post(port, f"/tasks/{task_id}:cancel")
         assert status == 200
-        assert body.get("status", {}).get("state") == "canceled", \
+        task = body.get("task", {})
+        assert task.get("status", {}).get("state") == "canceled", \
             f"Canceled task must have state=canceled: {body}"
 
     def test_cancel_task_returns_404_for_unknown_task(self, fresh_server):
@@ -738,8 +741,8 @@ class TestSendMessageConfiguration:
         # Should return quickly (not wait for _RESPONSE_TIMEOUT=120s)
         assert elapsed < 5, f"return_immediately=True should return quickly, took {elapsed}s"
         assert "result" in result
-        assert result["result"]["id"] == task_id
-        assert result["result"]["status"]["state"] == "working", \
+        assert result["result"]["task"]["id"] == task_id
+        assert result["result"]["task"]["status"]["state"] == "working", \
             f"Expected 'working' state when return_immediately=True: {result}"
 
     def test_send_message_with_accepted_output_modes(self, fresh_server):

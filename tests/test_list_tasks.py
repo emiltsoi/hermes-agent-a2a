@@ -109,13 +109,13 @@ class TestListTasksPagination:
     """Pagination tests for GET /tasks."""
 
     def test_list_tasks_returns_tasks_array(self, fresh_server):
-        """Response must include 'tasks' array of task objects."""
+        """Response must include 'task' array of task objects (proto: repeated Task task)."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        assert "tasks" in body, f"Response must include 'tasks' array: {body}"
-        assert isinstance(body["tasks"], list), f"'tasks' must be a list: {body}"
+        assert "task" in body, f"Response must include 'task' array: {body}"
+        assert isinstance(body["task"], list), f"'task' must be a list: {body}"
 
     def test_list_tasks_returns_next_page_token_field(self, fresh_server):
         """Response must include 'next_page_token' string field (empty string when no more pages)."""
@@ -152,7 +152,7 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        tasks = body.get("tasks", [])
+        tasks = body.get("task", [])
         task_ids = [t.get("id") for t in tasks]
         assert task_id in task_ids, f"Created task {task_id} must appear in tasks: {task_ids}"
 
@@ -165,7 +165,7 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        tasks = body.get("tasks", [])
+        tasks = body.get("task", [])
         assert len(tasks) > 0, "Must have at least one task item"
         item = tasks[0]
         assert "status" in item, f"Task item must have 'status': {item}"
@@ -180,7 +180,7 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        tasks = body.get("tasks", [])
+        tasks = body.get("task", [])
         assert len(tasks) > 0, "Must have at least one task item"
         assert "timestamp" in tasks[0]["status"], f"status must have 'timestamp': {tasks[0]}"
 
@@ -194,7 +194,7 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        tasks = body.get("tasks", [])
+        tasks = body.get("task", [])
         # With 5 tasks and default page_size=20, all 5 should be returned
         assert len(tasks) == 5, f"Expected all 5 tasks (default page_size=20), got {len(tasks)}: {[t['id'] for t in tasks]}"
         assert body["next_page_token"] == "", f"next_page_token should be empty when all tasks fit: {body}"
@@ -209,7 +209,7 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks?page_size=3")
         assert status == 200
-        tasks = body.get("tasks", [])
+        tasks = body.get("task", [])
         assert len(tasks) == 3, f"With page_size=3, expected 3 tasks, got {len(tasks)}"
 
     def test_list_tasks_next_page_token_empty_when_no_more(self, fresh_server):
@@ -290,8 +290,8 @@ class TestListTasksJsonRpc:
         assert "result" in result or "error" not in result, f"tasks/list should succeed: {result}"
         # Result should be the list body
         body = result.get("result", {})
-        assert "tasks" in body, f"tasks/list result must have 'tasks': {body}"
-        task_ids = [t.get("id") for t in body.get("tasks", [])]
+        assert "task" in body, f"tasks/list result must have 'task': {body}"
+        task_ids = [t.get("id") for t in body.get("task", [])]
         assert task_id in task_ids, f"Created task must appear in tasks/list: {task_ids}"
 
     def test_jsonrpc_tasks_list_with_page_size(self, fresh_server):
@@ -309,7 +309,7 @@ class TestListTasksJsonRpc:
         }
         result, _ = _rpc_request(port, payload)
         body = result.get("result", {})
-        tasks = body.get("tasks", [])
+        tasks = body.get("task", [])
         assert len(tasks) == 2, f"With pageSize=2, expected 2 tasks, got {len(tasks)}"
 
     def test_jsonrpc_tasks_list_with_continuation_token(self, fresh_server):
@@ -339,9 +339,9 @@ class TestListTasksJsonRpc:
         }
         result2, _ = _rpc_request(port, payload2)
         body2 = result2.get("result", {})
-        page2_ids = [t["id"] for t in body2.get("tasks", [])]
+        page2_ids = [t["id"] for t in body2.get("task", [])]
 
         # Should have different items from page 1
-        page1_ids = [t["id"] for t in body1.get("tasks", [])]
+        page1_ids = [t["id"] for t in body1.get("task", [])]
         assert set(page1_ids).isdisjoint(set(page2_ids)), \
             f"Pages should not overlap. P1={page1_ids}, P2={page2_ids}"

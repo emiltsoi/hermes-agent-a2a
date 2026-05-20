@@ -803,7 +803,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
             "jsonrpc": "2.0",
             "id": task_id,
             "status": {"state": "failed"},
-            "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],
+            "artifacts": [{"parts": [{"text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],
         }
     finally:
         unregister_worker(task_id)
@@ -817,19 +817,19 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
             return {
                 "id": task_id,
                 "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3: non-JSON worker output: {stdout[:200]!r}"}], "index": 0}],
+                "artifacts": [{"parts": [{"text": f"Mode 3: non-JSON worker output: {stdout[:200]!r}"}], "index": 0}],
             }
         response_text = worker_result.get("response", "")
         return {
             "id": task_id,
             "status": {"state": "completed"},
-            "artifacts": [{"parts": [{"type": "text", "text": response_text}], "index": 0}],
+            "artifacts": [{"parts": [{"text": response_text}], "index": 0}],
         }
     else:
         return {
             "id": task_id,
             "status": {"state": "failed"},
-            "artifacts": [{"parts": [{"type": "text", "text": f"Mode 3 worker error: {stderr.strip()[:300]}"}], "index": 0}],
+            "artifacts": [{"parts": [{"text": f"Mode 3 worker error: {stderr.strip()[:300]}"}], "index": 0}],
         }
 # Mode 3: caller side
 # ----------------------------------------------------------------------

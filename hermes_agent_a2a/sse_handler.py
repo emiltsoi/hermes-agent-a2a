@@ -76,7 +76,6 @@ class SSEEvent:
 
         if self.kind == "artifact":
             payload = {
-                "kind": "artifact",
                 "contextId": self.context_id or self.task_id,
                 "taskId": self.task_id,
                 "artifact": self.artifact or {},

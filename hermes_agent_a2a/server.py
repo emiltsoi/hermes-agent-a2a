@@ -758,7 +758,7 @@ def _build_paginated_task_list(page_size: int = 20, continuation_token: Optional
             items.append(_build_task_list_item(task, state))
 
     return {
-        "tasks": items,
+        "task": items,
         "page_size": page_size,
         "total_size": len(all_tasks),
         "next_page_token": next_token if next_token else "",
@@ -1623,7 +1623,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 return
             worker_canceled = cancel_worker(tid)
             _ensure_task_queue().cancel(tid)
-            result = {"id": tid, "status": {"state": "canceled"}, "metadata": {"hermes": {"worker_canceled": worker_canceled}}}
+            result = _build_task_object(task_id=tid, state="canceled")
         elif method == "SubscribeToTask":
             self._handle_send_subscribe(params, rpc_id)
             return
@@ -1642,7 +1642,21 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        self._send_json({"jsonrpc": "2.0", "result": result, "id": rpc_id})
+        # Wrap task-returning results per proto message definitions:
+        # SendMessageResponse, GetTaskResponse, CancelTaskResponse all use Task task = 1
+        if method in ("SendMessage", "GetTask", "CancelTask"):
+            rpc_result = {"task": result}
+        elif method == "ListTasks":
+            # ListTasksResponse: repeated Task task + pagination metadata at top level
+            rpc_result = {
+                "task": result.get("task", []),
+                "page_size": result.get("page_size"),
+                "total_size": result.get("total_size"),
+                "next_page_token": result.get("next_page_token"),
+            }
+        else:
+            rpc_result = result
+        self._send_json({"jsonrpc": "2.0", "result": rpc_result, "id": rpc_id})
 
     # -------------------------------------------------------------------------
     # REST handlers (F-B001, F-B005–F-B011)
@@ -1664,7 +1678,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             state=status["state"],
             response=status.get("response"),
         )
-        self._send_json(result)
+        self._send_json({"task": result})
 
     def _rest_list_tasks(self) -> None:
         """F-B006: GET /tasks — return paginated list of tasks.
@@ -1685,7 +1699,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         continuation_token = params.get("continuation_token", [None])[0]
 
         result = _build_paginated_task_list(page_size, continuation_token)
-        self._send_json(result)
+        self._send_json({"task": result.get("task", []), "page_size": result.get("page_size"), "total_size": result.get("total_size"), "next_page_token": result.get("next_page_token")})
 
     def _rest_cancel_task(self, task_id: str) -> None:
         """F-B007: POST /tasks/{id}:cancel — cancel a pending task."""
@@ -1709,7 +1723,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         _ensure_task_queue().cancel(task_id)
         # Build full proto-compliant Task per a2a.proto:163-183
         result = _build_task_object(task_id=task_id, state="canceled")
-        self._send_json(result)
+        self._send_json({"task": result})
 
     def _rest_subscribe_to_task(self, task_id: str) -> None:
         """F-B008: GET /tasks/{id}:subscribe — SSE stream for task updates."""

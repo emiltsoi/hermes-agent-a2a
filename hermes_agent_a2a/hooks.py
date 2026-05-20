@@ -244,7 +244,7 @@ class TaskStateChangeHook:
         self._push_sse(task_id, event)
 
         # 2. Push notifications — deliver to all webhook subscribers
-        self._push_notifications(task_id, old_state, new_state)
+        self._push_notifications(task_id, old_state, new_state, context_id=context_id or task_id)
 
     def _push_sse(self, task_id: str, event: "SSEEvent") -> None:
         """Push an SSE event to all open streams subscribed to task_id."""
@@ -256,7 +256,7 @@ class TaskStateChangeHook:
         except Exception as exc:
             logger.debug("[A2A hooks] SSE push error for task %s: %s", task_id, exc)
 
-    def _push_notifications(self, task_id: str, old_state: str, new_state: str) -> None:
+    def _push_notifications(self, task_id: str, old_state: str, new_state: str, context_id: Optional[str] = None) -> None:
         """Deliver push notifications to all subscribers of task_id."""
         try:
             store = self._subscription_store or _get_hook_subscription_store()
@@ -275,9 +275,16 @@ class TaskStateChangeHook:
             logger.debug("[A2A hooks] PushDelivery unavailable: %s", exc)
             return
 
+        # TaskStatusUpdateEvent per a2a.proto:775-787
+        from datetime import datetime, timezone
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         payload = {
             "taskId": task_id,
-            "state": new_state,
+            "contextId": context_id or task_id,
+            "status": {
+                "state": new_state,
+                "timestamp": timestamp,
+            },
             "event": _event_name_for_state(new_state),
         }
 

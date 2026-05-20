@@ -144,7 +144,17 @@ class TestEmitArtifactEvent:
         assert result.metadata == {"index": 0}
 
     def test_emit_artifact_event_sse_line_format(self):
-        """The SSE line for artifact must match the specified format."""
+        """The SSE line for artifact must match the TaskArtifactUpdateEvent format.
+
+        Per a2a.proto:775-787, TaskArtifactUpdateEvent has:
+        - contextId (REQUIRED)
+        - taskId (REQUIRED)
+        - artifact (REQUIRED)
+        - metadata (optional)
+
+        The field 'kind' is NOT part of the spec — the oneof discriminator is the
+        field name itself ('artifact_update'), not a 'kind' string.
+        """
         from hermes_agent_a2a.sse_handler import emit_artifact_event
 
         result = emit_artifact_event(
@@ -154,8 +164,8 @@ class TestEmitArtifactEvent:
             metadata={"index": 0},
         )
         sse_line = result.to_sse_line()
-        # Must contain the kind field with "artifact"
-        assert '"kind":"artifact"' in sse_line or '"kind": "artifact"' in sse_line
+        # Must NOT contain spurious 'kind' field
+        assert '"kind"' not in sse_line, "kind field is not in A2A spec TaskArtifactUpdateEvent"
         assert '"contextId":"ctx-1"' in sse_line or '"contextId": "ctx-1"' in sse_line
         assert '"taskId":"task-1"' in sse_line or '"taskId": "task-1"' in sse_line
         assert '"artifact"' in sse_line
@@ -190,8 +200,8 @@ class TestArtifactEventIntegration:
         pending = streamer.get_pending(stream_id)
         assert len(pending) == 1
         sse_line = pending[0]
-        # Verify the SSE line contains the required fields
-        assert '"kind":"artifact"' in sse_line or '"kind": "artifact"' in sse_line
+        # Verify the SSE line contains the required fields (no 'kind' per spec)
+        assert '"kind"' not in sse_line, "kind field is not in A2A spec"
         assert '"taskId":"task-artifact-1"' in sse_line or '"taskId": "task-artifact-1"' in sse_line
         assert '"contextId":"ctx-artifact-1"' in sse_line or '"contextId": "ctx-artifact-1"' in sse_line
         assert '"artifact"' in sse_line
@@ -274,7 +284,7 @@ class TestArtifactEventIntegration:
         pending = streamer.get_pending(stream_id)
         assert len(pending) == 1
         sse_line = pending[0]
-        assert '"kind":"artifact"' in sse_line or '"kind": "artifact"' in sse_line
+        assert '"kind"' not in sse_line, "kind field is not in A2A spec"
         assert '"taskId":"' + task_id + '"' in sse_line or '"taskId": "' + task_id + '"' in sse_line
 
         streamer.close_stream(stream_id)
