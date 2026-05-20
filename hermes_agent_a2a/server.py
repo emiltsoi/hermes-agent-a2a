@@ -637,6 +637,28 @@ def _utc_now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _build_status_update_payload(task_id: str, state: str, context_id: Optional[str] = None) -> dict:
+    """Build a proto-compliant TaskStatusUpdateEvent payload per a2a.proto:788-800.
+
+    TaskStatusUpdateEvent fields:
+      contextId (REQUIRED): context identifier
+      taskId (REQUIRED): task identifier
+      status (REQUIRED): TaskStatus with state and timestamp
+      event (optional): SSE event name
+      metadata (optional): additional metadata
+    """
+    from .hooks import _event_name_for_state as _event_name
+    return {
+        "taskId": task_id,
+        "contextId": context_id or task_id,
+        "status": {
+            "state": state,
+            "timestamp": _utc_now_iso(),
+        },
+        "event": _event_name(state),
+    }
+
+
 def _build_message_object(text: str, role: int = 2, message_id: Optional[str] = None) -> dict:
     """Build a proto-compliant Message object per a2a.proto:260-277.
 
@@ -886,15 +908,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 return False
 
-        # Immediate initial event
+        # Immediate initial event (TaskStatusUpdateEvent per a2a.proto:788-800)
         import json
         from .hooks import _event_name_for_state as _event_name
         initial_event_id = str(uuid.uuid4())
-        initial = {
-            "taskId": task_id,
-            "state": current_state,
-            "event": _event_name(current_state),
-        }
+        initial = _build_status_update_payload(task_id, current_state)
         if not _send_line(f"id: {initial_event_id}\n"):
             streamer.close_stream(stream_id)
             return
@@ -934,10 +952,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             # Check if task reached terminal state
             status = q.get_status(task_id)
             if status.get("state") in terminal_states:
-                # Send final state event and close
+                # Send final state event and close (TaskStatusUpdateEvent per a2a.proto:788-800)
                 term_state = status["state"]
                 term_event_id = str(uuid.uuid4())
-                term_event = {"taskId": task_id, "state": term_state, "event": _event_name(term_state)}
+                term_event = _build_status_update_payload(task_id, term_state)
                 _send_line(f"id: {term_event_id}\n")
                 _send_line(f"event: {_event_name(term_state)}\n")
                 _send_line(f"data: {json.dumps(term_event, ensure_ascii=False)}\n\n")
@@ -1107,9 +1125,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 return False
 
-        # Initial state event
+        # Initial state event (TaskStatusUpdateEvent per a2a.proto:788-800)
         initial_event_id = str(uuid.uuid4())
-        initial_payload = json.dumps({"taskId": tid, "state": current_state, "event": _event_name(current_state)}, ensure_ascii=False)
+        initial_payload = json.dumps(_build_status_update_payload(tid, current_state), ensure_ascii=False)
         if not _send_line(f"id: {initial_event_id}\n"):
             streamer.close_stream(stream_id)
             return
@@ -1143,7 +1161,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             status = q.get_status(tid)
             if is_terminal_state(status.get("state", "")):
                 term_state = status["state"]
-                term_payload = json.dumps({"taskId": tid, "state": term_state, "event": _event_name(term_state)}, ensure_ascii=False)
+                term_payload = json.dumps(_build_status_update_payload(tid, term_state), ensure_ascii=False)
                 _send_line(f"event: {_event_name(term_state)}\n")
                 _send_line(f"data: {term_payload}\n\n")
                 streamer.close_stream(stream_id)
@@ -1762,7 +1780,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 return False
 
         initial_event_id = str(uuid.uuid4())
-        initial_payload = json.dumps({"taskId": task_id, "state": current_state, "event": _event_name(current_state)}, ensure_ascii=False)
+        initial_payload = json.dumps(_build_status_update_payload(task_id, current_state), ensure_ascii=False)
         if not _send_line(f"id: {initial_event_id}\n"):
             streamer.close_stream(stream_id)
             return
@@ -1792,7 +1810,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             status = _ensure_task_queue().get_status(task_id)
             if is_terminal_state(status.get("state", "")):
                 term_state = status["state"]
-                term_payload = json.dumps({"taskId": task_id, "state": term_state, "event": _event_name(term_state)}, ensure_ascii=False)
+                term_payload = json.dumps(_build_status_update_payload(task_id, term_state), ensure_ascii=False)
                 _send_line(f"event: {_event_name(term_state)}\n")
                 _send_line(f"data: {term_payload}\n\n")
                 streamer.close_stream(stream_id)
@@ -1992,9 +2010,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 return False
 
-        # Initial working event
+        # Initial working event (TaskStatusUpdateEvent per a2a.proto:788-800)
         initial_event_id = str(uuid.uuid4())
-        initial_payload = json.dumps({"taskId": task_id, "state": "working", "event": _event_name("working")}, ensure_ascii=False)
+        initial_payload = json.dumps(_build_status_update_payload(task_id, "working", context_id), ensure_ascii=False)
         _send_line(f"id: {initial_event_id}\n")
         _send_line(f"event: {_event_name('working')}\n")
         _send_line(f"data: {initial_payload}\n\n")
@@ -2014,7 +2032,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             status = _ensure_task_queue().get_status(task_id)
             state = status.get("state", "working")
             if is_terminal_state(state):
-                term_payload = json.dumps({"taskId": task_id, "state": state, "event": _event_name(state)}, ensure_ascii=False)
+                term_payload = json.dumps(_build_status_update_payload(task_id, state, context_id), ensure_ascii=False)
                 _send_line(f"event: {_event_name(state)}\n")
                 _send_line(f"data: {term_payload}\n\n")
                 streamer.close_stream(stream_id)
