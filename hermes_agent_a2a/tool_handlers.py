@@ -755,7 +755,7 @@ def _handle_call_mode2(
 # ----------------------------------------------------------------------
 
 
-def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dict:
+def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str, context_id: Optional[str] = None) -> dict:
     """Called by server.py when worker_at='target'.
 
     Runs the local worker subprocess and returns a JSON-RPC compatible dict.
@@ -800,8 +800,8 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
             proc.kill()
             proc.wait()
         return {
-            "jsonrpc": "2.0",
             "id": task_id,
+            "context_id": context_id or task_id,
             "status": {"state": "failed"},
             "artifacts": [{"parts": [{"text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],
         }
@@ -816,18 +816,21 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str) -> dic
         except json.JSONDecodeError:
             return {
                 "id": task_id,
+                "context_id": context_id or task_id,
                 "status": {"state": "failed"},
                 "artifacts": [{"parts": [{"text": f"Mode 3: non-JSON worker output: {stdout[:200]!r}"}], "index": 0}],
             }
         response_text = worker_result.get("response", "")
         return {
             "id": task_id,
+            "context_id": context_id or task_id,
             "status": {"state": "completed"},
             "artifacts": [{"parts": [{"text": response_text}], "index": 0}],
         }
     else:
         return {
             "id": task_id,
+            "context_id": context_id or task_id,
             "status": {"state": "failed"},
             "artifacts": [{"parts": [{"text": f"Mode 3 worker error: {stderr.strip()[:300]}"}], "index": 0}],
         }

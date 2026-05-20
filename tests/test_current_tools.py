@@ -1095,12 +1095,14 @@ def test_cr3_mode3_timeout_response_includes_jsonrpc_field(tmp_path, monkeypatch
     with patch.object(tools.subprocess, "Popen", return_value=mock_proc):
         result = tools._handle_task_send_mode3(params, metadata, user_text)
 
-    # Verify the response has jsonrpc field per JSON-RPC 2.0 spec
+    # Mode 3 timeout returns a Task-like object (not a JSON-RPC envelope).
+    # The server wraps it in {"task": ...} for the JSON-RPC response.
     assert isinstance(result, dict), "Timeout response must be a dict"
-    assert "jsonrpc" in result, "Timeout response must include 'jsonrpc' field"
-    assert result["jsonrpc"] == "2.0", "jsonrpc field must be '2.0'"
     assert result["status"]["state"] == "failed"
     assert "timed out" in result["artifacts"][0]["parts"][0]["text"]
+    # context_id should be present (falls back to task_id when not provided)
+    assert "context_id" in result, "Task must include context_id"
+    assert result["context_id"] == result["id"], "context_id should default to task_id"
 
 
 def test_mode2_env_sanitization_only_whitelisted_vars(tmp_path, monkeypatch):

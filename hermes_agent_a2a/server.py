@@ -1274,7 +1274,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             import logging as _log
             _log.getLogger(__name__).info("[A2A] worker_at=target — dispatching to _handle_task_send_mode3")
             from .tool_handlers import _handle_task_send_mode3
-            return _handle_task_send_mode3(params, metadata, user_text)
+            return _handle_task_send_mode3(params, metadata, user_text, context_id)
 
         if "sender_name" not in metadata:
             from_field = params.get("from") or params.get("sender", {}).get("name")
@@ -1426,8 +1426,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 for artifact in result.get("artifacts", []):
                     payload = {
                         "artifact_update": {
-                            "context_id": ctx_id,
-                            "task_id": task_id,
+                            "contextId": ctx_id,
+                            "taskId": task_id,
                             "artifact": artifact,
                             "metadata": {"index": artifact.get("index")},
                         }
