@@ -79,6 +79,14 @@ def build_extended_agent_card(overrides: Optional[dict] = None) -> dict:
         "agentCapabilities": asdict(AgentCapabilities()),
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
+        "skills": [
+            {
+                "id": "brainstorming",
+                "name": "brainstorming",
+                "description": "Fleet-shared creative and ideation skill for structured brainstorming sessions. Use before any creative work.",
+                "tags": ["creative", "ideation", "fleet-shared"],
+            }
+        ],
     }
     if overrides:
         for key, value in overrides.items():
