@@ -1359,9 +1359,7 @@ def test_call_a2a_direct_builds_correct_json_rpc_payload():
         body = json.loads(req.data.decode())
         assert body["jsonrpc"] == "2.0"
         assert body["method"] == "SendMessage"
-        assert body["params"]["id"] == "task-123"
-        assert body["params"]["message"]["role"] == "user"
-        assert body["params"]["message"]["parts"][0]["type"] == "text"
+        assert body["params"]["message"]["role"] == 1
         assert body["params"]["message"]["parts"][0]["text"] == "hello"
 
         # Verify auth token in headers
@@ -1643,9 +1641,7 @@ def test_2d_cta_behavioral():
     
     # Verify envelope structure is correct (spec format)
     assert envelope["method"] == "SendMessage"
-    assert envelope["params"]["id"] == "test-task"
-    assert envelope["params"]["message"]["role"] == "user"
-    assert envelope["params"]["message"]["parts"][0]["type"] == "text"
+    assert envelope["params"]["message"]["role"] == 1
     assert envelope["params"]["message"]["parts"][0]["text"] == "test message"
     
     # Verify metadata includes intent and expected_action

@@ -105,11 +105,10 @@ def build_task_send_payload(
         "id": request_id or str(uuid.uuid4()),
         "method": "SendMessage",
         "params": {
-            "id": task_id,
             "message": {
                 "message_id": str(uuid.uuid4()),
-                "role": "user",
-                "parts": [{"type": "text", "text": message}],
+                "role": 1,
+                "parts": [{"text": message}],
                 "metadata": metadata,
             },
         },
@@ -170,12 +169,17 @@ def build_error_response(code: int, message: str, data=None, id=None) -> dict:
 
 def parse_task_result(rpc_result: dict, default_task_id: str = "") -> dict:
     rpc_result = rpc_result or {}
-    status = rpc_result.get("status", {}) if isinstance(rpc_result, dict) else {}
+    # v1.0 wraps response in a "task" envelope
+    inner = rpc_result.get("task", {}) if isinstance(rpc_result, dict) else {}
+    if not inner:
+        inner = rpc_result  # fall back to old flat format
+
+    status = inner.get("status", {}) if isinstance(inner, dict) else {}
     state = status.get("state", "unknown") if isinstance(status, dict) else "unknown"
-    task_id = rpc_result.get("id", default_task_id) if isinstance(rpc_result, dict) else default_task_id
+    task_id = inner.get("id", default_task_id) if isinstance(inner, dict) else default_task_id
     chunks = []
 
-    for artifact in rpc_result.get("artifacts", []) or []:
+    for artifact in inner.get("artifacts", []) or []:
         if isinstance(artifact, dict):
             text = extract_text_from_parts(artifact.get("parts", []))
             if text:
@@ -187,7 +191,7 @@ def parse_task_result(rpc_result: dict, default_task_id: str = "") -> dict:
         if text:
             chunks.append(text)
 
-    direct_message = rpc_result.get("message", {}) if isinstance(rpc_result, dict) else {}
+    direct_message = inner.get("message", {}) if isinstance(inner, dict) else {}
     if isinstance(direct_message, dict):
         text = extract_text_from_parts(direct_message.get("parts", []))
         if text:
