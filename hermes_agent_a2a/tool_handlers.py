@@ -1350,7 +1350,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     }
 
 
-def handle_get_metrics(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
+def handle_get_metrics(task_id: Optional[str] = None, **kwargs) -> dict:
     """Get current A2A plugin metrics.
 
     Args:
