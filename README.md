@@ -193,6 +193,27 @@ a2a_cancel_protocol_task(task_id="local-task-123")
 
 When called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess. When `name` or `url` is provided, it also sends a standard A2A `CancelTask` to the remote agent. The result includes `local_canceled` indicating whether local cancellation succeeded.
 
+## Google A2A v1.0 Compliance
+
+`hermes-agent-a2a` implements the [Google A2A](https://github.com/google/A2A) HTTP/JSON-RPC protocol specification (a2a.proto v1.0).
+
+| Spec Item | Status | Details |
+|-----------|--------|---------|
+| JSON-RPC 2.0 | ✅ | All requests/responses conform to JSON-RPC 2.0 |
+| Method names | ✅ | `SendMessage`, `GetTask`, `CancelTask`, `SubscribeToTask` per a2a.proto |
+| AgentCard schema | ✅ | `AgentProvider`, `AgentSkill`, `AgentCapabilities`, `AgentInterface` per spec |
+| Task state machine | ✅ | Canonical states: submitted, working, input_required, completed, failed, canceled, rejected |
+| Role enum | ✅ | `Role.ROLE_USER = 1` (integer) per a2a.proto:245-252 |
+| Parts oneof | ✅ | `parts: [{"text": "..."}]` without type wrapper per spec |
+| Push notification REST | ✅ | `POST/GET/DELETE /tasks/{id}/pushNotificationConfigs` |
+| SSE streaming | ✅ | `POST /message:stream` with Server-Sent Events |
+| A2A-Version header | ✅ | All responses include `A2A-Version: 1.0` |
+| Error codes | ✅ | `-32700`, `-32600`, `-32603`, `-38000` through `-38004` per spec |
+| Idempotency keys | ✅ | 24h TTL, same-key/diff-payload returns `-38004` |
+| SendMessageConfiguration | ✅ | `return_immediately`, `accepted_output_modes` accepted |
+
+---
+
 ## The Mesh: Session-Aware Fleet Messaging
 
 This is the main thing that makes Hermes fleets different from standard A2A.
