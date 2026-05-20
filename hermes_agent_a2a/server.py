@@ -1094,6 +1094,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 -38002, "Push notification not supported", id=rpc_id
             )
 
+        # SSRF check before storing
+        from .security import validate_webhook_endpoint
+        valid, reason = validate_webhook_endpoint(webhook_url)
+        if not valid:
+            return build_error_response(-38003, f"Invalid webhook endpoint: {reason}", id=rpc_id)
+
         sub_id = store.add(tid, webhook_url, hmac_key)
         return {"subscriptionId": sub_id, "taskId": tid}
 
