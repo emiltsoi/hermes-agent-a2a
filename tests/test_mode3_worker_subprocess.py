@@ -9,6 +9,7 @@ Tests cover:
 
 import subprocess
 import time
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -21,6 +22,10 @@ from hermes_agent_a2a.worker_registry import (
     _processes,
     _lock,
 )
+
+
+# Test constant — avoids hardcoded home path in public test code
+TEST_HERMES_HOME = str(Path.home() / ".hermes")
 
 
 class TestWorkerRegistrySubprocessLifecycle:
@@ -219,7 +224,7 @@ class TestMode3WorkerSubprocessTimeout:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         result = _handle_task_send_mode3(
                             params={"id": task_id, "name": "testagent"},
                             metadata={"timeout": timeout},
@@ -248,7 +253,7 @@ class TestMode3WorkerSubprocessTimeout:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         with patch("hermes_agent_a2a.worker_registry.cleanup_zombie_processes") as mock_cleanup:
                             mock_cleanup.return_value = 0
 
@@ -292,7 +297,7 @@ class TestMode3WorkerNonZeroExit:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         result = _handle_task_send_mode3(
                             params={"id": task_id, "name": "testagent"},
                             metadata={"timeout": 300},
@@ -318,7 +323,7 @@ class TestMode3WorkerNonZeroExit:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         result = _handle_task_send_mode3(
                             params={"id": task_id, "name": "testagent"},
                             metadata={"timeout": 300},
@@ -342,7 +347,7 @@ class TestMode3WorkerNonZeroExit:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         result = _handle_task_send_mode3(
                             params={"id": task_id, "name": "testagent"},
                             metadata={"timeout": 300},
@@ -383,7 +388,7 @@ class TestMode2WorkerSubprocess:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         with patch("os.path.isdir", return_value=True):
                             result = _handle_call_mode2(
                                 name="testagent",
@@ -409,7 +414,7 @@ class TestMode2WorkerSubprocess:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         with patch("os.path.isdir", return_value=True):
                             result = _handle_call_mode2(
                                 name="testagent",
@@ -437,7 +442,7 @@ class TestMode2WorkerSubprocess:
         with patch("hermes_agent_a2a.tool_handlers.subprocess.Popen", return_value=mock_proc):
             with patch("hermes_agent_a2a.tool_handlers.register_worker"):
                 with patch("hermes_agent_a2a.tool_handlers.unregister_worker"):
-                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value="/home/emil/.hermes"):
+                    with patch("hermes_agent_a2a.tool_handlers._derive_hermes_home", return_value=TEST_HERMES_HOME):
                         with patch("os.path.isdir", return_value=True):
                             result = _handle_call_mode2(
                                 name="testagent",
