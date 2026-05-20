@@ -345,8 +345,8 @@ def deliver_artifact_push(
     # Spec-compliant StreamResponse payload with artifact_update discriminator
     payload = {
         "artifact_update": {
-            "task_id": task_id,
-            "context_id": context_id,
+            "taskId": task_id,
+            "contextId": context_id,
             "artifact": artifact,
             "append": False,
             "last_chunk": True,

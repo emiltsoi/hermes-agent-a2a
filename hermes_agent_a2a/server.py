@@ -781,9 +781,9 @@ def _build_paginated_task_list(page_size: int = 20, continuation_token: Optional
 
     return {
         "task": items,
-        "page_size": page_size,
-        "total_size": len(all_tasks),
-        "next_page_token": next_token if next_token else "",
+        "pageSize": page_size,
+        "totalSize": len(all_tasks),
+        "nextPageToken": next_token if next_token else "",
     }
 
 
@@ -1668,9 +1668,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             # ListTasksResponse: repeated Task task + pagination metadata at top level
             rpc_result = {
                 "task": result.get("task", []),
-                "page_size": result.get("page_size"),
-                "total_size": result.get("total_size"),
-                "next_page_token": result.get("next_page_token"),
+                "pageSize": result.get("pageSize"),
+                "totalSize": result.get("totalSize"),
+                "nextPageToken": result.get("nextPageToken"),
             }
         else:
             rpc_result = result
@@ -1717,7 +1717,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         continuation_token = params.get("continuation_token", [None])[0]
 
         result = _build_paginated_task_list(page_size, continuation_token)
-        self._send_json({"task": result.get("task", []), "page_size": result.get("page_size"), "total_size": result.get("total_size"), "next_page_token": result.get("next_page_token")})
+        self._send_json({"task": result.get("task", []), "pageSize": result.get("pageSize"), "totalSize": result.get("totalSize"), "nextPageToken": result.get("nextPageToken")})
 
     def _rest_cancel_task(self, task_id: str) -> None:
         """F-B007: POST /tasks/{id}:cancel — cancel a pending task."""
@@ -2315,7 +2315,7 @@ class A2AServer(ThreadingHTTPServer):
             "url": public_url,
             "version": HERMES_VERSION,
             "protocol": "a2a",
-            "protocolVersion": "0.2.0",
+            "protocolVersion": "1.0",
             "provider": {"url": public_url, "organization": "Hermes Fleet"},
             "capabilities": {
                 "streaming": True,
@@ -2333,7 +2333,7 @@ class A2AServer(ThreadingHTTPServer):
                 {
                     "url": public_url,
                     "protocol_binding": "http://a2a-protocol.hermes.ai",
-                    "protocol_version": "0.2.0",
+                    "protocol_version": "1.0",
                 }
             ],
             "default_input_modes": ["text"],

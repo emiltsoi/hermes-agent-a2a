@@ -243,14 +243,14 @@ class TestListTasks:
         assert status2 == 200, f"page_size param must not cause error: {body2}"
 
     def test_list_tasks_returns_pagination_fields(self, fresh_server):
-        """GET /tasks must return next_page_token, page_size, total_size fields."""
+        """GET /tasks must return nextPageToken, pageSize, totalSize fields (camelCase per proto JSON)."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        assert "next_page_token" in body, f"Response must have 'next_page_token': {body}"
-        assert "page_size" in body, f"Response must have 'page_size': {body}"
-        assert "total_size" in body, f"Response must have 'total_size': {body}"
+        assert "nextPageToken" in body, f"Response must have 'nextPageToken': {body}"
+        assert "pageSize" in body, f"Response must have 'pageSize': {body}"
+        assert "totalSize" in body, f"Response must have 'totalSize': {body}"
 
 
 # ---------------------------------------------------------------------------

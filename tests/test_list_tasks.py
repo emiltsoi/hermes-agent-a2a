@@ -118,30 +118,30 @@ class TestListTasksPagination:
         assert isinstance(body["task"], list), f"'task' must be a list: {body}"
 
     def test_list_tasks_returns_next_page_token_field(self, fresh_server):
-        """Response must include 'next_page_token' string field (empty string when no more pages)."""
+        """Response must include 'nextPageToken' string field (empty string when no more pages)."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        assert "next_page_token" in body, f"Response must include 'next_page_token' field: {body}"
+        assert "nextPageToken" in body, f"Response must include 'nextPageToken' field: {body}"
 
     def test_list_tasks_returns_page_size_field(self, fresh_server):
-        """Response must include 'page_size' integer field."""
+        """Response must include 'pageSize' integer field."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        assert "page_size" in body, f"Response must include 'page_size' field: {body}"
-        assert isinstance(body["page_size"], int), f"'page_size' must be an int: {body}"
+        assert "pageSize" in body, f"Response must include 'pageSize' field: {body}"
+        assert isinstance(body["pageSize"], int), f"'pageSize' must be an int: {body}"
 
     def test_list_tasks_returns_total_size_field(self, fresh_server):
-        """Response must include 'total_size' integer field."""
+        """Response must include 'totalSize' integer field."""
         server, port = fresh_server
 
         body, status = _rest_get(port, "/tasks")
         assert status == 200
-        assert "total_size" in body, f"Response must include 'total_size' field: {body}"
-        assert isinstance(body["total_size"], int), f"'total_size' must be an int: {body}"
+        assert "totalSize" in body, f"Response must include 'totalSize' field: {body}"
+        assert isinstance(body["totalSize"], int), f"'totalSize' must be an int: {body}"
 
     def test_list_tasks_item_has_task_id_field(self, fresh_server):
         """Each task item must include 'id' field."""
@@ -196,8 +196,8 @@ class TestListTasksPagination:
         assert status == 200
         tasks = body.get("task", [])
         # With 5 tasks and default page_size=20, all 5 should be returned
-        assert len(tasks) == 5, f"Expected all 5 tasks (default page_size=20), got {len(tasks)}: {[t['id'] for t in tasks]}"
-        assert body["next_page_token"] == "", f"next_page_token should be empty when all tasks fit: {body}"
+        assert len(tasks) == 5, f"Expected all 5 tasks (default pageSize=20), got {len(tasks)}: {[t['id'] for t in tasks]}"
+        assert body["nextPageToken"] == "", f"nextPageToken should be empty when all tasks fit: {body}"
 
     def test_list_tasks_page_size_param(self, fresh_server):
         """page_size query param controls number of returned items."""
@@ -213,7 +213,7 @@ class TestListTasksPagination:
         assert len(tasks) == 3, f"With page_size=3, expected 3 tasks, got {len(tasks)}"
 
     def test_list_tasks_next_page_token_empty_when_no_more(self, fresh_server):
-        """next_page_token must be empty string when all items fit in one page."""
+        """nextPageToken must be empty string when all items fit in one page."""
         server, port = fresh_server
 
         # Create 3 tasks
@@ -222,10 +222,10 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks?page_size=10")
         assert status == 200
-        assert body["next_page_token"] == "", f"next_page_token should be empty when all items fit: {body}"
+        assert body["nextPageToken"] == "", f"nextPageToken should be empty when all items fit: {body}"
 
     def test_list_tasks_next_page_token_is_valid_base64(self, fresh_server):
-        """next_page_token must be valid base64 when there are more pages."""
+        """nextPageToken must be valid base64 when there are more pages."""
         server, port = fresh_server
 
         # Create 5 tasks with page_size=2
@@ -234,18 +234,18 @@ class TestListTasksPagination:
 
         body, status = _rest_get(port, "/tasks?page_size=2")
         assert status == 200
-        if body["next_page_token"]:
-            token = body.get("next_page_token", "")
+        if body["nextPageToken"]:
+            token = body.get("nextPageToken", "")
             try:
                 decoded = base64.b64decode(token)
                 # Should decode to an integer offset string
                 offset = int(decoded.decode())
                 assert offset >= 0, "Decoded offset must be non-negative"
             except Exception as e:
-                pytest.fail(f"next_page_token must be valid base64-encoded offset: {e}")
+                pytest.fail(f"nextPageToken must be valid base64-encoded offset: {e}")
 
     def test_list_tasks_continuation_token_returns_next_page(self, fresh_server):
-        """Passing next_page_token from page 1 should return page 2 (different items)."""
+        """Passing nextPageToken from page 1 should return page 2 (different items)."""
         server, port = fresh_server
 
         # Create 5 tasks with distinct IDs
@@ -256,14 +256,14 @@ class TestListTasksPagination:
         # Get first page
         body1, status1 = _rest_get(port, "/tasks?page_size=2")
         assert status1 == 200
-        page1_ids = [t["id"] for t in body1.get("tasks", [])]
+        page1_ids = [t["id"] for t in body1.get("task", [])]
 
         # Get second page using continuation token
-        token = body1.get("next_page_token", "")
-        assert token, "next_page_token must be present for 5 tasks with page_size=2"
+        token = body1.get("nextPageToken", "")
+        assert token, "nextPageToken must be present for 5 tasks with page_size=2"
         body2, status2 = _rest_get(port, f"/tasks?page_size=2&continuation_token={token}")
         assert status2 == 200
-        page2_ids = [t["id"] for t in body2.get("tasks", [])]
+        page2_ids = [t["id"] for t in body2.get("task", [])]
 
         # Pages should not overlap
         assert set(page1_ids).isdisjoint(set(page2_ids)), \
@@ -328,7 +328,7 @@ class TestListTasksJsonRpc:
         }
         result1, _ = _rpc_request(port, payload1)
         body1 = result1.get("result", {})
-        token = body1.get("next_page_token", "")
+        token = body1.get("nextPageToken", "")
 
         # Get second page
         payload2 = {
