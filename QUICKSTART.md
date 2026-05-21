@@ -192,7 +192,34 @@ a2a_send_protocol_task(
 
 The Agent Card capability `pushNotifications: true` indicates push support.
 
-## 13. Hermes-only worker tools
+## 13. Announce to a shared A2A registry
+
+Set the registry URL and auth token:
+
+```bash
+export A2A_REGISTRY_URL='https://your-registry.example/a2a/agents'
+export A2A_REGISTRY_AUTH_TOKEN='your-registry-token'
+```
+
+Announce this agent's Agent Card to the registry:
+
+```text
+a2a_announce()
+```
+
+Returns `{announced: true, agent_card, registry_response}` on success. Other agents can then discover this agent via `a2a_discover(name="your-agent-name")` without needing its URL upfront.
+
+Override per-call with explicit params:
+
+```text
+a2a_announce(
+  url="https://registry.example/a2a/agents",
+  auth_type="bearer",
+  auth_value="token-secret"
+)
+```
+
+## 14. Hermes-only worker tools
 
 Use these only for Hermes-managed agents, not generic external A2A agents:
 
@@ -201,7 +228,7 @@ a2a_run_local_agent_task(name="agent1", message="Analyze this", timeout=300)
 a2a_run_remote_agent_task(name="agent1", message="Analyze this on your host", timeout=300)
 ```
 
-## 12. Configure session routing for `a2a_send_session_message`
+## 15. Configure session routing for `a2a_send_session_message`
 
 `a2a_send_session_message` is a one-way Hermes session relay. The receiving Hermes profile must route inbound webhook text to a configured session/platform in its `config.yaml`.
 

@@ -63,6 +63,8 @@ def _load_a2a_agents() -> dict:
                 cfg = yaml.safe_load(f) or {}
             agents = cfg.get("a2a", {}).get("agents", []) or []
             return {a.get("name", "").lower(): a for a in agents if a.get("name")}
+    except (yaml.YAMLError, RuntimeError) as exc:
+        logger.warning("[_load_a2a_agents] YAML/config error: %s", exc)
     except Exception:
         pass
     return {}
@@ -348,9 +350,12 @@ def resolve_agent(name: str) -> Optional[dict]:
     agent_key = name.lower()
     identity_file = _fleet_root() / "a2a" / "agents" / agent_key / "identity.yaml"
     try:
+        import yaml as _yaml
         identity = _load_yaml_file(identity_file)
     except RuntimeError:
         raise
+    except _yaml.YAMLError as exc:
+        raise RuntimeError(f"A2A identity error: failed to parse {identity_file} — malformed YAML: {exc}") from exc
     except Exception:
         identity = None
     if identity:

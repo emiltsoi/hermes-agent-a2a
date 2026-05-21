@@ -126,7 +126,9 @@ def _derive_hermes_home() -> str:
     # Validate the derived path contains expected structure
     hermes_agent_path = os.path.join(hermes_home, "hermes-agent")
     if not Path(hermes_agent_path).is_dir():
-        # Only fall back if HERMES_HOME was not explicitly set
+        # Only fall back if HERMES_HOME was not explicitly set.
+        # If HERMES_HOME was explicitly set and is invalid, fail rather than
+        # silently running mode 2 workers against the wrong profile (~/.hermes).
         hermes_home_was_default = "HERMES_HOME" not in os.environ
         if hermes_home_was_default:
             fallback = str(Path.home() / ".hermes")
@@ -134,7 +136,8 @@ def _derive_hermes_home() -> str:
                 return fallback
         raise ValueError(
             f"Cannot find Hermes installation at {hermes_home}. "
-            f"Set HERMES_HOME to the correct root directory."
+            f"HERMES_HOME is set to '{hermes_home}' but hermes-agent/ is not found there. "
+            f"Set HERMES_HOME correctly or leave it unset to use the default."
         )
     
     return hermes_home
@@ -782,6 +785,7 @@ def _handle_call_mode2(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            start_new_session=True,
         )
         register_worker(task_id, proc)
         stdout, stderr = proc.communicate(input=json.dumps(params), timeout=timeout)
@@ -856,6 +860,7 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str, contex
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            start_new_session=True,
         )
         register_worker(task_id, proc)
         stdout, stderr = proc.communicate(input=json.dumps(worker_params), timeout=timeout)

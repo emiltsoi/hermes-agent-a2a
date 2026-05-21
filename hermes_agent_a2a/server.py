@@ -90,7 +90,7 @@ def _get_a2a_extensions() -> str:
 
 
 class _PendingTask:
-    __slots__ = ("task_id", "text", "metadata", "response", "ready", "created_at", "context_id")
+    __slots__ = ("task_id", "text", "metadata", "response", "ready", "created_at", "context_id", "_returned")
 
     def __init__(self, task_id: str, text: str, metadata: dict, context_id: Optional[str] = None):
         self.task_id = task_id
@@ -100,6 +100,7 @@ class _PendingTask:
         self.ready = Event()
         self.created_at = time.time()
         self.context_id = context_id
+        self._returned = False  # True once A2A server has returned to caller
 
 
 class TaskQueue:
@@ -260,8 +261,12 @@ class TaskQueue:
             self._processing.discard(task_id)
             task = self._pending.pop(task_id, None)
             if task:
-                task.response = response
-                task.ready.set()
+                # Only set response if we haven't already returned to the caller.
+                # Late completions after timeout are logged but don't overwrite
+                # the response already delivered to the client.
+                if not task._returned:
+                    task.response = response
+                    task.ready.set()
                 self._completed[task_id] = task
                 self._complete_count += 1
                 self._states[task_id] = "completed"
@@ -1365,6 +1370,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # Per SendMessageConfiguration.return_immediately (a2a.proto:143-161):
         # If True, return immediately without waiting for task completion.
         if return_immediately:
+            task._returned = True
             return _build_task_object(
                 task_id=task_id,
                 state="working",
@@ -1375,6 +1381,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 
         if task.response is None:
+            # Timed out without any gateway response — mark as returned so any
+            # late gateway completion is ignored (not silently lost to caller).
+            task._returned = True
             return _build_task_object(
                 task_id=task_id,
                 state="working",

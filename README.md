@@ -7,6 +7,7 @@
 | Capability | Tools / Files | Purpose |
 |---|---|---|
 | Agent discovery | `a2a_discover` | Fetch an Agent Card by registry name or direct URL. Can auto-register external agents. |
+| **Registry announcement** | `a2a_announce` | Announce this agent to a shared A2A registry so other agents can discover it. Reads `A2A_REGISTRY_URL` env var. |
 | Protocol tasks | `a2a_send_protocol_task` | Send JSON-RPC `SendMessage` and poll `GetTask`. |
 | Hermes local workers | `a2a_run_local_agent_task` | Run another local Hermes profile as an ephemeral worker with Hermes A2A metadata. |
 | Hermes remote workers | `a2a_run_remote_agent_task` | Ask a remote Hermes A2A server to run its own ephemeral worker. |
@@ -23,6 +24,7 @@ The plugin registers the `a2a` toolset with these tools:
 
 - `a2a_help`
 - `a2a_discover`
+- `a2a_announce`
 - `a2a_list`
 - `a2a_send_protocol_task`
 - `a2a_cancel_protocol_task`
@@ -332,6 +334,8 @@ Common variables:
 | `A2A_PORT` | A2A server port. Defaults to `8081`. |
 | `A2A_AUTH_TOKEN` | Optional inbound bearer token for this server. |
 | `A2A_REQUIRE_AUTH` | Set `true` to reject unauthenticated inbound requests. |
+| `A2A_REGISTRY_URL` | Shared A2A registry URL for `a2a_announce`. Defaults to nothing (must be set to use announcement). |
+| `A2A_REGISTRY_AUTH_TOKEN` | Bearer token for the shared A2A registry. |
 
 **Webhook delivery configuration:**
 

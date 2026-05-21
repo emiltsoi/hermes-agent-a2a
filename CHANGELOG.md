@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.11] - 2026-05-21
+
+### New Feature — Shared A2A Registry Discovery
+
+- **`a2a_announce` tool added**: Announce this agent to a shared A2A registry so other agents can discover it via `a2a_discover`. Reads registry URL from `A2A_REGISTRY_URL` env var (default) or `url` param override. Auth via `A2A_REGISTRY_AUTH_TOKEN` env var or explicit per-call params (`auth_type`, `auth_header`, `auth_value`). Builds the local AgentCard and POSTs it to the registry. Returns `{announced: true, agent_card, registry_response}` on success, or `{announced: false, error}` on failure.
+- **New env vars**: `A2A_REGISTRY_URL`, `A2A_REGISTRY_AUTH_TOKEN`
+- **`a2a_announce` registered in tool registry**: Tool available in the `a2a` toolset alongside `a2a_discover`, `a2a_list`, `a2a_send_protocol_task`, and other tools
+
 ## [3.2.10] - 2026-05-21
 
 ### Documentation
