@@ -192,10 +192,14 @@ class SSEStreamer:
     def close_stream(self, stream_id: str) -> None:
         """Close a stream — flushes remaining events and removes it."""
         with self._lock:
-            stream = self._streams.pop(stream_id, None)
+            stream = self._streams.get(stream_id)
             if stream is None:
                 return
+            # Set closed BEFORE popping so concurrent push_event calls
+            # see the flag and return early instead of appending to the
+            # stream object after it is removed from _streams.
             stream.closed = True
+            self._streams.pop(stream_id, None)
             # Remove from task index
             task_streams = self._by_task.get(stream.task_id, [])
             if stream_id in task_streams:

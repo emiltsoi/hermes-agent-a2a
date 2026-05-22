@@ -414,12 +414,8 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
 
     secret = os.getenv("A2A_WEBHOOK_SECRET", "")
     if not secret:
-        if os.getenv("WEBHOOK_SECRET"):
-            logger.warning("[A2A] A2A_WEBHOOK_SECRET not set, falling back to WEBHOOK_SECRET. This is not recommended for security.")
-            secret = os.getenv("WEBHOOK_SECRET", "")
-        if not secret:
-            if on_failure:
-                on_failure(task_id)
+        if on_failure:
+            on_failure(task_id)
         return
 
     body_dict = {
@@ -551,13 +547,9 @@ async def _trigger_webhook_async(message: str = "", task_id: str = "", mode: str
 
     secret = os.getenv("A2A_WEBHOOK_SECRET", "")
     if not secret:
-        if os.getenv("WEBHOOK_SECRET"):
-            logger.warning("[A2A] A2A_WEBHOOK_SECRET not set, falling back to WEBHOOK_SECRET. This is not recommended for security.")
-            secret = os.getenv("WEBHOOK_SECRET", "")
-        if not secret:
-            if on_failure:
-                on_failure(task_id)
-            return
+        if on_failure:
+            on_failure(task_id)
+        return
 
     # SSRF guard: reject loopback hosts before building the webhook URL.
     # Placed after the secret check so a bad env var causes a no-op rather
@@ -870,6 +862,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # Always bypass auth for localhost — fleet-local subprocess calls
         # (Mode 2/3) may have no Bearer token configured, which is correct.
         if remote in ("127.0.0.1", "::1"):
+            if self.server.require_auth:
+                logger.warning(
+                    "[A2A] Localhost request from %s — rejecting (A2A_REQUIRE_AUTH=true)",
+                    remote,
+                )
+                return False
             logger.warning(
                 "[A2A] Allowing localhost request from %s — bypassing auth",
                 remote,
@@ -1422,8 +1420,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                     )
                     for sid in stream_ids:
                         streamer.push_event(sid, evt)
-        except Exception:
-            pass  # SSE delivery is best-effort; do not fail the response
+        except Exception as e:
+            logger.warning("[A2A] SSE delivery failed for task %s: %s", task_id, e)
 
         # Also deliver artifact events as push notifications to webhook subscribers
         try:
@@ -1443,8 +1441,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                         }
                     }
                     pusher.deliver_with_retry(sub.url, payload, sub.hmac_key)
-        except Exception:
-            pass  # Push delivery is best-effort; do not fail the response
+        except Exception as e:
+            logger.warning("[A2A] Push notification delivery failed for task %s: %s", task_id, e)
 
         return result
 
