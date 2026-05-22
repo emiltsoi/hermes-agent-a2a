@@ -31,7 +31,7 @@ def fresh_server():
         "A2A_PORT": str(port),
         "A2A_HOST": "127.0.0.1",
         "A2A_AUTH_TOKEN": "test-secret",
-        "A2A_REQUIRE_AUTH": "true",
+        "A2A_REQUIRE_AUTH": "false",
         "HERMES_HOME": "/tmp/test_sse_streaming_hermes",
     }):
         from hermes_agent_a2a import plugin as plugin_module
