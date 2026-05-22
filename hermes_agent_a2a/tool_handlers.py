@@ -358,8 +358,15 @@ def _dict_args_handler(func):
         if args is None:
             args = {}
         if isinstance(args, dict):
-            return func(**args, **kwargs)
+            # Merge into a single dict so kwargs can override.
+            # Calling `func(**args, **kwargs)` directly with a duplicate key
+            # raises TypeError (multiple values for argument) in Python 3.
+            merged = {**args, **kwargs}
+            return func(**merged)
         return func(args, **kwargs)
+    # Propagate function attributes so stacked decorators work correctly.
+    wrapper.__name__ = func.__name__
+    wrapper.__doc__ = func.__doc__
     return wrapper
 
 

@@ -875,7 +875,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 )
                 return False
             remote = self.client_address[0]
-            allowed = remote in ("127.0.0.1", "::1") and self.server.require_auth
+            allowed = remote in ("127.0.0.1", "::1")
             if allowed:
                 logger.warning(
                     "[A2A] Allowing unauthenticated localhost request from %s — A2A_REQUIRE_AUTH is set; "
