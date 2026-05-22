@@ -1492,6 +1492,22 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
     def _do_json_rpc(self) -> None:
         """Handle JSON-RPC over POST. Replaces the old do_POST body."""
+        import logging as _dbg
+        _dbg.getLogger(__name__).info("[A2A DEBUG] _do_json_rpc path=%s client=%s", self.path, self.client_address)
+        try:
+            self._do_json_rpc_inner()
+        except Exception as exc:
+            import traceback as _tb
+            _dbg.getLogger(__name__).error("[A2A] CRASH in _do_json_rpc: %s\n%s", exc, _tb.format_exc())
+            try:
+                self._send_json(
+                    {"jsonrpc": "2.0", "error": {"code": -32603, "message": f"Internal error: {exc}"}, "id": None},
+                    500,
+                )
+            except Exception:
+                pass
+
+    def _do_json_rpc_inner(self) -> None:
         if not self._check_auth():
             self._send_json(
                 {

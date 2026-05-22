@@ -840,7 +840,9 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str, contex
     timeout = int(metadata.get("timeout") or params.get("timeout") or 300)
 
     hermes_home = _derive_hermes_home()
-    name = params.get("name") or metadata.get("agent_name")
+    name = params.get("name") or metadata.get("agent_name") or metadata.get("sender_name")
+    if not name:
+        raise ValueError("agent name not found in params.name, metadata.agent_name, or metadata.sender_name")
     agent_home = os.path.join(hermes_home, "profiles", name.lower())
 
     venv_python = os.environ.get("A2A_VENV_PYTHON", os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"))
@@ -1120,6 +1122,7 @@ def handle_send_protocol_task(
 
 
 @_rate_limited
+@_dict_args_handler
 def handle_run_local_agent_task(
     name: str = "",
     message: str = "",
@@ -1131,6 +1134,7 @@ def handle_run_local_agent_task(
 
 
 @_rate_limited
+@_dict_args_handler
 def handle_run_remote_agent_task(
     name: str = "",
     message: str = "",
