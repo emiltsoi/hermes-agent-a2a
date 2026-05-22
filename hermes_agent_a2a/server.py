@@ -866,6 +866,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _check_auth(self) -> bool:
+        remote = self.client_address[0]
+        # Always bypass auth for localhost — fleet-local subprocess calls
+        # (Mode 2/3) may have no Bearer token configured, which is correct.
+        if remote in ("127.0.0.1", "::1"):
+            logger.warning(
+                "[A2A] Allowing localhost request from %s — bypassing auth",
+                remote,
+            )
+            return True
         token = self.server.auth_token
         if not token:
             if self.server.require_auth:
@@ -874,15 +883,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                     self.client_address[0],
                 )
                 return False
-            remote = self.client_address[0]
-            allowed = remote in ("127.0.0.1", "::1")
-            if allowed:
-                logger.warning(
-                    "[A2A] Allowing unauthenticated localhost request from %s — A2A_REQUIRE_AUTH is set; "
-                    "note: localhost is not isolated in containers/shared namespaces",
-                    remote,
-                )
-            return allowed
+            return False
         auth_header = self.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return False
