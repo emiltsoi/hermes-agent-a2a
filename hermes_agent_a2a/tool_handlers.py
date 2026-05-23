@@ -1005,6 +1005,7 @@ def handle_send_protocol_task(
     message: str = "",
     skill: Optional[str] = None,
     task_id: Optional[str] = None,
+    reply_to_task_id: Optional[str] = None,
     intent: Optional[str] = None,
     expected_action: Optional[str] = None,
     timeout: int = _DEFAULT_TIMEOUT,
@@ -1063,6 +1064,12 @@ def handle_send_protocol_task(
         skill=skill,
         hermes=build_hermes_metadata(route="protocol", execution="remote_a2a"),
     )
+
+    # Wire reply_to_task_id into message metadata for threading
+    # task_id -> params.id (RPC routing target)
+    # reply_to_task_id -> params.message.metadata (thread context only)
+    if reply_to_task_id:
+        payload["params"]["message"]["metadata"]["reply_to_task_id"] = reply_to_task_id
 
     headers = _auth_headers(resolved_auth)
 
