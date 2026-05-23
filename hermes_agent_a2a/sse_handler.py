@@ -326,11 +326,13 @@ class SSEStreamer:
                     continue
                 idle = now - stream._last_activity
                 if idle > self._idle_timeout:
-                    self._streams.pop(stream_id)
-                    # Remove from task index
+                    # Remove from task index first — ensures push_event sees an empty
+                    # _by_task and drops the event cleanly, rather than sending to a
+                    # closed stream (the race window between _streams and _by_task removal)
                     task_streams = self._by_task.get(stream.task_id, [])
                     if stream_id in task_streams:
                         task_streams.remove(stream_id)
+                    self._streams.pop(stream_id)
                     logger.warning(
                         "sse_handler: closing idle stream_id=%s task_id=%s "
                         "(idle %.1f s > %.0f s)",
