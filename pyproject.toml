@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hermes-agent-a2a"
-version = "3.2.18"
-description = "A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents — mesh session relay, HMAC auth, push notifications, SSE streaming, and platform-independent gateway hook float."
+version = "3.2.19"
+description = "A2A HTTP/JSON-RPC protocol plugin for Hermes — Google A2A v1.0 spec-compliant (SendMessage, GetTask, CancelTask), fleet session relay with full sender context, platform-independent gateway hook float, HMAC-signed push notifications, and SSE streaming."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["httpx>=0.27", "PyJWT>=2.8"]
