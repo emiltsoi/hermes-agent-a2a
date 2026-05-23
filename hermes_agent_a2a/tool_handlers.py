@@ -1268,7 +1268,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         return {"error": "'agent' is required"}
 
     # Own bot_token: resolve from caller's own vault via VaultResolver.
-    # This is used only for the non-fatal sender-side visibility echo.
+    # Used for sender-side visibility echo (non-fatal).
     try:
         own_vault = _vault().resolve()
     except RuntimeError:
@@ -1401,8 +1401,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     else:
         return {"error": f"Agent '{agent}' has no webhook_url in vault"}
 
-    # Part 2: Emit gateway hook for Telegram float (fully async, non-blocking).
-    # Replaces direct Telegram HTTP call + A2A_DISABLE_SENDER_ECHO env var.
+    # Part 2: Emit gateway hook for session float (fully async, non-blocking).
+    # a2a:send hook replaces the old direct Telegram HTTP call.
     try:
         import asyncio as _asyncio
         from gateway.run import _gateway_runner_ref

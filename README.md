@@ -307,7 +307,7 @@ The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches tha
 - `gateway/platforms/base.py`: +2 lines for `_platform` override in `build_source()`
 - `gateway/run.py`: +6 lines for webhook allowlist bypass
 
-The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and optional Telegram float via the `a2a:send` gateway hook. The gateway should only provide generic authenticated webhook-to-session routing.
+The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and platform-independent session float via the `a2a:send` gateway hook. Drop a platform-specific hook handler (Telegram, Discord, etc.) to route floats to any channel. The gateway only needs to provide generic authenticated webhook-to-session routing.
 
 ### Recommended Cleanup Path for Hermes Core Patches
 
@@ -346,7 +346,7 @@ Common variables:
 | `A2A_WEBHOOK_DELIVERY_TIMEOUT` | HTTP timeout in seconds for webhook delivery. Defaults to `10`. |
 | `A2A_WEBHOOK_REACHABILITY_CHECK` | Set `true` to validate webhook reachability before delivery. Defaults to `false`. |
 | `A2A_WEBHOOK_REACHABILITY_TIMEOUT` | Timeout in seconds for reachability check. Defaults to `5`. |
-| `A2A_DISABLE_SENDER_ECHO` | Set `true` to disable sender-side Telegram echo. Defaults to `false`. |
+| `A2A_FLOAT_ENABLED` | Set `false` to disable the `a2a:send` gateway hook float. Defaults to `true`. |
 
 **Metrics configuration:**
 
