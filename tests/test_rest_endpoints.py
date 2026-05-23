@@ -130,8 +130,9 @@ def fresh_server():
 
         state = rs_module.get_runtime_state()
         server = state.get_server()
+        actual_port = server.server_port  # may differ if port retry occurred
 
-        yield server, port
+        yield server, actual_port
 
         # Teardown
         try:
