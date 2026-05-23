@@ -222,9 +222,11 @@ This is the main thing that makes Hermes fleets different from standard A2A.
 
 **Standard A2A is orchestration:** one agent delegates a task to another, gets a result back, continues. The relationship is client → worker. Context doesn't persist between turns.
 
-**Hermes mesh is teamwork:** agents hold conversations across sessions, preserve full sender context (platform, chat, thread, identity), and reply into the correct place without either side needing to know the other's infrastructure topology. Britney can ask Linda a question mid-dispatch and get a threaded reply back in the same conversation.
+**Hermes mesh is teamwork:** agents hold conversations across sessions, preserve sender context (sender_name, message ID being replied to), and route replies through the mesh by convention. Britney can ask Linda a question mid-dispatch and get a threaded reply back — when both agents follow the mesh discipline documented below.
 
-`a2a_send_session_message` is the mesh bridge. The envelope carries the sender's full identity context — which platform, which chat, which user, which thread — so the recipient's LLM sees exactly who asked and can respond correctly. The reply routes back through the mesh automatically.
+`a2a_send_session_message` is the mesh bridge. The envelope carries sender context — sender_name and the message ID being replied to — so the recipient's LLM sees exactly who asked and what they're responding to. Thread continuity within the mesh is preserved by agent discipline, not protocol enforcement: agents agree to route replies through `a2a_send_session_message` back to the sender. This is intentional — convention-based coordination lets agents exercise judgment rather than follow mechanical rules. The fleet's organic interactions (escalation instead of reflex-loop, context-aware routing) emerge from this flexibility.
+
+**In a multi-owner or adversarial deployment, this model is insufficient.** A protocol-level mechanism would be needed. We're considering an optional hardwired mode (e.g., `X-Fleet-Hops` header with configurable threshold) for deployments that need protocol guarantees over organic flexibility.
 
 This is not a webhook relay. It's a session-to-session handoff where the envelope does the routing work.
 
