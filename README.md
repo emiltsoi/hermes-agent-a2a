@@ -172,7 +172,7 @@ The target agent's A2A server process must have a `HERMES_HOME` environment vari
 **Same path resolution on target:**
 The target's profile directory must exist and be reachable at the path the target's `HERMES_HOME` resolves to. Cross-machine deployments where the caller and target have different filesystem layouts require a shared network mount (NFS, EFS, etc.) or a container image with a pre-mounted profile path.
 
-These constraints do not apply to `a2a_send_protocol_task`, which communicates with external A2A agents over HTTP without spawning local workers.
+These constraints do not apply to `a2a_send_protocol_task`, which communicates with external A2A agents over HTTP without spawning local workers, or `a2a_send_session_message`, which delivers a message into the target's gateway session over HTTP — both work with any reachable agent regardless of filesystem layout.
 
 ## List registered agents
 
