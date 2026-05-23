@@ -1,5 +1,5 @@
 name: hermes-agent-a2a
-version: "3.0.0"
+version: "3.2.18"
 description: |
   A2A (Agent-to-Agent) protocol plugin for Hermes Agent.
   Self-contained: exposes discovery, protocol task, session-message,
