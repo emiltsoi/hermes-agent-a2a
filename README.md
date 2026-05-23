@@ -226,7 +226,7 @@ This is the main thing that makes Hermes fleets different from standard A2A.
 
 `a2a_send_session_message` is the mesh bridge. The envelope carries sender context — sender_name and the message ID being replied to — so the recipient's LLM sees exactly who asked and what they're responding to. Thread continuity within the mesh is preserved by agent discipline, not protocol enforcement: agents agree to route replies through `a2a_send_session_message` back to the sender. This is intentional — convention-based coordination lets agents exercise judgment rather than follow mechanical rules. The fleet's organic interactions (escalation instead of reflex-loop, context-aware routing) emerge from this flexibility.
 
-**In a multi-owner or adversarial deployment, this model is insufficient.** A protocol-level mechanism would be needed. We're considering an optional hardwired mode (e.g., `X-Fleet-Hops` header with configurable threshold) for deployments that need protocol guarantees over organic flexibility.
+**In a multi-owner or adversarial deployment, this model is insufficient.** A protocol-level mechanism would be needed. `X-Fleet-Hops` (for 1-1 task exchange) could address reflexive loops there; mesh multi-party discussions have no loop problem since each agent routes independently.
 
 This is not a webhook relay. It's a session-to-session handoff where the envelope does the routing work.
 
