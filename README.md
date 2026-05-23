@@ -164,6 +164,16 @@ a2a_run_remote_agent_task(name="agent1", message="Work on your host", timeout=30
 
 Both worker tools return task-shaped results with Hermes metadata. Local workers use `route=worker`, `execution=local_subprocess`, and `isolation=local_profile`; remote workers use `execution=remote_subprocess` and `isolation=target_profile`.
 
+### Requirements for `a2a_run_remote_agent_task`
+
+**Shared filesystem (same `HERMES_HOME`):**
+The target agent's A2A server process must have a `HERMES_HOME` environment variable that points to a filesystem accessible from the target machine — typically the same NFS-mounted home directory used by all fleet agents. The spawned worker runs on the target's filesystem using the target's `HERMES_HOME/profiles/{name}/` to locate the agent's profile and venv Python. If the target machine cannot reach that path (different user, different home, isolated machine), the spawn fails.
+
+**Same path resolution on target:**
+The target's profile directory must exist and be reachable at the path the target's `HERMES_HOME` resolves to. Cross-machine deployments where the caller and target have different filesystem layouts require a shared network mount (NFS, EFS, etc.) or a container image with a pre-mounted profile path.
+
+These constraints do not apply to `a2a_send_protocol_task`, which communicates with external A2A agents over HTTP without spawning local workers.
+
 ## List registered agents
 
 Use `a2a_list` to see all configured agents in the fleet registry:
