@@ -709,6 +709,14 @@ def handle_announce(
     resolved_auth = _direct_auth(token if token else None, auth_type, auth_header, auth_value)
     headers = _auth_headers(resolved_auth)
 
+    # SSRF protection: validate registry URL with is_safe_url before making HTTP request
+    # is_safe_url blocks private CIDRs (10.x, 172.16-31.x, 192.168.x, 169.254.x),
+    # metadata endpoints, and resolves hostnames to detect SSRF targets
+    from hermes_agent_a2a.security import is_safe_url as _is_safe_url
+
+    if not _is_safe_url(registry_url):
+        return {"announced": False, "error": "Registry URL is not safe: registry_url not allowed for security reasons"}
+
     try:
         result = _http_request(
             "POST",

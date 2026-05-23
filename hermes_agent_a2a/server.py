@@ -960,9 +960,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 term_state = status["state"]
                 term_event_id = str(uuid.uuid4())
                 term_event = _build_status_update_payload(task_id, term_state)
-                _send_line(f"id: {term_event_id}\n")
-                _send_line(f"event: {_event_name(term_state)}\n")
-                _send_line(f"data: {json.dumps(term_event, ensure_ascii=False)}\n\n")
+                if not _send_line(f"id: {term_event_id}\n"):
+                    streamer.close_stream(stream_id)
+                    return
+                if not _send_line(f"event: {_event_name(term_state)}\n"):
+                    streamer.close_stream(stream_id)
+                    return
+                if not _send_line(f"data: {json.dumps(term_event, ensure_ascii=False)}\n\n"):
+                    streamer.close_stream(stream_id)
+                    return
                 streamer.close_stream(stream_id)
                 return
 
@@ -1835,8 +1841,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             if is_terminal_state(status.get("state", "")):
                 term_state = status["state"]
                 term_payload = json.dumps(_build_status_update_payload(task_id, term_state), ensure_ascii=False)
-                _send_line(f"event: {_event_name(term_state)}\n")
-                _send_line(f"data: {term_payload}\n\n")
+                if not _send_line(f"event: {_event_name(term_state)}\n"):
+                    streamer.close_stream(stream_id)
+                    return
+                if not _send_line(f"data: {term_payload}\n\n"):
+                    streamer.close_stream(stream_id)
+                    return
                 streamer.close_stream(stream_id)
                 return
             time.sleep(poll_interval)
@@ -2037,9 +2047,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # Initial working event (TaskStatusUpdateEvent per a2a.proto:788-800)
         initial_event_id = str(uuid.uuid4())
         initial_payload = json.dumps(_build_status_update_payload(task_id, "working", context_id), ensure_ascii=False)
-        _send_line(f"id: {initial_event_id}\n")
-        _send_line(f"event: {_event_name('working')}\n")
-        _send_line(f"data: {initial_payload}\n\n")
+        if not _send_line(f"id: {initial_event_id}\n"):
+            streamer.close_stream(stream_id)
+            return
+        if not _send_line(f"event: {_event_name('working')}\n"):
+            streamer.close_stream(stream_id)
+            return
+        if not _send_line(f"data: {initial_payload}\n\n"):
+            streamer.close_stream(stream_id)
+            return
 
         poll_interval = 0.5  # seconds — 5x fewer wakeups than 0.1s, still responsive
         max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))

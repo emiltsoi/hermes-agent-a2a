@@ -1823,7 +1823,8 @@ def test_announce_posts_agent_card_to_registry(monkeypatch):
 
     with patch.object(tools, "_ensure_server", return_value=mock_server):
         with patch.object(tools, "_http_request", return_value=registry_response) as mock_http:
-            result = tools.handle_announce()
+            with patch("hermes_agent_a2a.security.is_safe_url", return_value=True):
+                result = tools.handle_announce()
 
     assert result.get("announced") is True
     assert result.get("agent_card", {}).get("name") == "test-agent"
@@ -1845,7 +1846,8 @@ def test_announce_includes_auth_token_from_env(monkeypatch):
 
     with patch.object(tools, "_ensure_server", return_value=mock_server):
         with patch.object(tools, "_http_request", return_value={"status": "ok"}) as mock_http:
-            tools.handle_announce()
+            with patch("hermes_agent_a2a.security.is_safe_url", return_value=True):
+                tools.handle_announce()
 
     call_args = mock_http.call_args
     headers = call_args[1].get("headers", {})
@@ -1863,7 +1865,8 @@ def test_announce_handles_connection_error(monkeypatch):
 
     with patch.object(tools, "_ensure_server", return_value=mock_server):
         with patch.object(tools, "_http_request", side_effect=ConnectionError("Cannot connect")):
-            result = tools.handle_announce()
+            with patch("hermes_agent_a2a.security.is_safe_url", return_value=True):
+                result = tools.handle_announce()
 
     assert result.get("announced") is False
     assert "Cannot connect" in result.get("error", "")
@@ -1880,7 +1883,8 @@ def test_announce_url_param_overrides_env_var(monkeypatch):
 
     with patch.object(tools, "_ensure_server", return_value=mock_server):
         with patch.object(tools, "_http_request", return_value={"status": "ok"}) as mock_http:
-            tools.handle_announce(url="http://custom-registry:9091/register")
+            with patch("hermes_agent_a2a.security.is_safe_url", return_value=True):
+                tools.handle_announce(url="http://custom-registry:9091/register")
 
     call_args = mock_http.call_args
     assert "custom-registry:9091" in call_args[0][1]
