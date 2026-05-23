@@ -1,6 +1,6 @@
 # Hermes Agent A2A
 
-`hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, Telegram session routing with sender echo, and fleet metrics — all Hermes-specific, not fleet-agnostic.
+`hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, session relay with gateway hook support, and fleet metrics — all Hermes-specific, not fleet-agnostic.
 
 ## Capabilities
 
@@ -307,7 +307,7 @@ The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches tha
 - `gateway/platforms/base.py`: +2 lines for `_platform` override in `build_source()`
 - `gateway/run.py`: +6 lines for webhook allowlist bypass
 
-The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and sender-side Telegram visibility echo. The gateway should only provide generic authenticated webhook-to-session routing.
+The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and optional Telegram float via the `a2a:send` gateway hook. The gateway should only provide generic authenticated webhook-to-session routing.
 
 ### Recommended Cleanup Path for Hermes Core Patches
 

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.12] - 2026-05-23
+
+### Architecture — Telegram Float Decoupled via Gateway Hook
+
+- **`a2a:send` gateway hook**: `a2a_send_session_message` now emits a `a2a:send` gateway hook event after HTTP delivery, replacing the hardcoded Telegram HTTP call. This decouples platform concerns from the A2A layer.
+- **`A2A_DISABLE_SENDER_ECHO` env var removed**: Float control moves to `~/.hermes/hooks/a2a-float/rules.yaml` — no longer env-driven.
+- **`sender_echo` field removed** from `a2a_send_session_message` response dict.
+- README and QUICKSTART updated to reflect gateway hook architecture.
+
 ## [3.2.11] - 2026-05-21
 
 ### New Feature — Shared A2A Registry Discovery
