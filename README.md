@@ -39,11 +39,13 @@ The plugin registers the `a2a` toolset with these tools:
 
 ## Use Cases
 
+All of these patterns are powered by `a2a_send_session_message` — the session relay tool that delivers a message into a target agent's live conversation context with full thread continuity. No polling, no separate worker process, no context loss.
+
 ### Background agents that wake on schedule
 
 You want an agent to do work while you're not watching — poll a feed, check a system, prepare a daily briefing. Most agent frameworks solve this with a separate daemon or polling loop.
 
-The Hermes mesh approach: the agent's session *is* the ambient worker. A cron job fires → routes into the agent's live session via A2A float → agent wakes with full context intact → acts → replies.
+The Hermes mesh approach: the agent's session *is* the ambient worker. A cron job fires → routes into the agent's live session via `a2a_send_session_message` → agent wakes with full context intact → acts → replies via the mesh.
 
 ```
 Cron tick fires
@@ -52,7 +54,7 @@ Cron tick fires
 Webhook hit (Telegram or any platform)
      │
      ▼
-A2A float — message routes into agent's live session
+a2a_send_session_message → agent's live session
      │
      ▼
 Agent session wakes. Full conversation history available.
@@ -62,7 +64,7 @@ Agent reads the A2A message, acts, replies.
 Reply routes back through the mesh to the caller.
 ```
 
-No separate worker daemon. No polling. The agent was sleeping — its session was idle. The schedule woke it. When it finishes, it goes back to sleep. The session persists so the next wake has full context from the previous run.
+No separate worker daemon. No polling. The agent was sleeping — its session was idle. The schedule woke it via `a2a_send_session_message`. When it finishes, it goes back to sleep. The session persists so the next wake has full context from the previous run.
 
 What this enables: daily digests compiled by 7am, monitoring agents that alert only on change, background research that accumulates context over days and delivers when ready.
 
@@ -70,22 +72,22 @@ What this enables: daily digests compiled by 7am, monitoring agents that alert o
 
 A complex task needs architecture thinking, domain discovery, and implementation planning. You could throw it all at one agent, but specialists are better.
 
-The Hermes mesh approach: talk to three different agents in sequence, each building full context independently. When you reach execution, you have three expert perspectives — not one confused generalist.
+The Hermes mesh approach: talk to three different agents in sequence via `a2a_send_session_message`, each building full context independently. When you reach execution, you have three expert perspectives — not one confused generalist.
 
 ```
-You → Isa (Discovery)     → "Find the relevant services in this codebase"
-     ← Isa responds with structured findings
+You → a2a_send_session_message → Isa (Discovery)
+     ← structured findings with full codebase context
 
-You → Britney (Architecture) → "Here's what Isa found — how should it be structured"
-     ← Britney responds with architecture proposal
+You → a2a_send_session_message → Britney (Architecture)
+     ← architecture proposal grounded in Isa's actual findings
 
-You → Linda (Design Review) → "Review Britney's proposal for coupling and failure modes"
-     ← Linda responds with signed-off design
+You → a2a_send_session_message → Linda (Design Review)
+     ← signed-off design with coupling and failure mode analysis
 
 You → Merge all three perspectives → Claude Code executes with full specialist context
 ```
 
-Each agent maintained a fully-persistent session. Isa's context is complete — she was inside the codebase, she knows what she found and what she dismissed. Britney responds to Isa's actual findings. Linda reviews the real architecture, not a paraphrase.
+Each agent maintained a fully-persistent session. Isa's context is complete — she was inside the codebase, she knows what she found and what she dismissed. Britney responds to Isa's actual findings. Linda reviews the real architecture, not a paraphrase. All routing happens via `a2a_send_session_message` through the mesh — the user never leaves their own interface.
 
 The human is the curator: deciding which specialist to consult, in what order, when to stop prep and start executing.
 
@@ -93,18 +95,18 @@ What this enables: multi-domain tasks handled by actual specialists rather than 
 
 ### Specialist injection — agents loop in specialists mid-chain
 
-During any relay chain, an agent can pull in a specialist without restarting or losing context. The chain pauses, the specialist responds, their output flows back in, the chain continues.
+During any relay chain, an agent can pull in a specialist via `a2a_send_session_message` without restarting or losing context. The chain pauses, the specialist responds, their output flows back in, the chain continues.
 
 ```
-Britney → Linda (design review)
+Britney → a2a_send_session_message → Linda (design review)
     │
     Linda detects a coupling issue that spans Isa's domain
     │
-    Linda A2A → Isa: "What's the import graph for module X?"
+    Linda → a2a_send_session_message → Isa: "What's the import graph for module X?"
     Isa responds with the graph
     │
     Linda folds Isa's data into the review
-    Linda A2A → Britney: "Approved, with one routing change"
+    Linda → a2a_send_session_message → Britney: "Approved, with one routing change"
 ```
 
 The human didn't know to call Isa — Linda did it because the mesh discipline says: wrong domain, route first. No context loss, no chain restart, no paraphrase. The specialist consultation is invisible to the caller.
@@ -113,13 +115,13 @@ What this enables: agents that self-correct by consulting the right specialist w
 
 ### Parallel specialist prep — all at once, not one at a time
 
-Same result as the specialist chain, but run in parallel instead of sequence.
+Same result as the specialist chain, but run in parallel instead of sequence. All three calls to `a2a_send_session_message` fire simultaneously — each agent works in isolation with a complete session, none waiting for the others.
 
 ```
-You → Isa (discovery)    ─┐
-You → Britney (arch)     ─┤
-You → Linda (review)     ─┘
-     All three act simultaneously
+You → a2a_send_session_message → Isa (discovery)    ─┐
+You → a2a_send_session_message → Britney (arch)     ─┤
+You → a2a_send_session_message → Linda (review)     ─┘
+     All three act in parallel
      │
      ▼
 You receive three independent, fully-contextual responses
