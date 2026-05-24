@@ -91,6 +91,45 @@ The human is the curator: deciding which specialist to consult, in what order, w
 
 What this enables: multi-domain tasks handled by actual specialists rather than a single LLM acting as all of them, quality-gated workflows where each specialist signs off before the next stage, reduced hallucination because each specialist's claims are grounded in their own exploration.
 
+### Specialist injection — agents loop in specialists mid-chain
+
+During any relay chain, an agent can pull in a specialist without restarting or losing context. The chain pauses, the specialist responds, their output flows back in, the chain continues.
+
+```
+Britney → Linda (design review)
+    │
+    Linda detects a coupling issue that spans Isa's domain
+    │
+    Linda A2A → Isa: "What's the import graph for module X?"
+    Isa responds with the graph
+    │
+    Linda folds Isa's data into the review
+    Linda A2A → Britney: "Approved, with one routing change"
+```
+
+The human didn't know to call Isa — Linda did it because the mesh discipline says: wrong domain, route first. No context loss, no chain restart, no paraphrase. The specialist consultation is invisible to the caller.
+
+What this enables: agents that self-correct by consulting the right specialist when they hit a domain boundary, chains that get smarter as they run without human intervention, context that flows through the right expert regardless of who initiated the chain.
+
+### Parallel specialist prep — all at once, not one at a time
+
+Same result as the specialist chain, but run in parallel instead of sequence.
+
+```
+You → Isa (discovery)    ─┐
+You → Britney (arch)     ─┤
+You → Linda (review)     ─┘
+     All three act simultaneously
+     │
+     ▼
+You receive three independent, fully-contextual responses
+Merge → Claude Code executes
+```
+
+Each agent had an uninterrupted, complete session. None of them know about the others until you merge the outputs. The context never got diluted by multitasking — every specialist worked in isolation and delivered a finished result.
+
+What this enables: same quality as sequential specialist prep in a fraction of the time, agents that work at their own pace without blocking each other, human curator assembles the final output from complete specialist perspectives rather than watching a generalist try to do three things at once.
+
 ## Install
 
 ### From PyPI (recommended)
