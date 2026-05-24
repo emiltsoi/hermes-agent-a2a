@@ -37,6 +37,60 @@ The plugin registers the `a2a` toolset with these tools:
 
 `a2a_cancel_protocol_task` sends standard A2A `CancelTask` when `name` or `url` is provided. If called with only `task_id`, it attempts to cancel a locally registered Hermes worker subprocess.
 
+## Use Cases
+
+### Background agents that wake on schedule
+
+You want an agent to do work while you're not watching — poll a feed, check a system, prepare a daily briefing. Most agent frameworks solve this with a separate daemon or polling loop.
+
+The Hermes mesh approach: the agent's session *is* the ambient worker. A cron job fires → routes into the agent's live session via A2A float → agent wakes with full context intact → acts → replies.
+
+```
+Cron tick fires
+     │
+     ▼
+Webhook hit (Telegram or any platform)
+     │
+     ▼
+A2A float — message routes into agent's live session
+     │
+     ▼
+Agent session wakes. Full conversation history available.
+Agent reads the A2A message, acts, replies.
+     │
+     ▼
+Reply routes back through the mesh to the caller.
+```
+
+No separate worker daemon. No polling. The agent was sleeping — its session was idle. The schedule woke it. When it finishes, it goes back to sleep. The session persists so the next wake has full context from the previous run.
+
+What this enables: daily digests compiled by 7am, monitoring agents that alert only on change, background research that accumulates context over days and delivers when ready.
+
+### Specialist chain — humans curate, agents specialize
+
+A complex task needs architecture thinking, domain discovery, and implementation planning. You could throw it all at one agent, but specialists are better.
+
+The Hermes mesh approach: talk to three different agents in sequence, each building full context independently. When you reach execution, you have three expert perspectives — not one confused generalist.
+
+```
+You → Isa (Discovery)     → "Find the relevant services in this codebase"
+     ← Isa responds with structured findings
+
+You → Britney (Architecture) → "Here's what Isa found — how should it be structured"
+     ← Britney responds with architecture proposal
+
+You → Linda (Design Review) → "Review Britney's proposal for coupling and failure modes"
+     ← Linda responds with signed-off design
+
+You → Merge all three perspectives → Claude Code executes with full specialist context
+```
+
+Each agent maintained a fully-persistent session. Isa's context is complete — she was inside the codebase, she knows what she found and what she dismissed. Britney responds to Isa's actual findings. Linda reviews the real architecture, not a paraphrase.
+
+The human is the curator: deciding which specialist to consult, in what order, when to stop prep and start executing.
+
+What this enables: multi-domain tasks handled by actual specialists rather than a single LLM acting as all of them, quality-gated workflows where each specialist signs off before the next stage, reduced hallucination because each specialist's claims are grounded in their own exploration.
+
 ## Install
 
 ### From PyPI (recommended)
