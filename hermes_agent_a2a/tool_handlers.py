@@ -1409,12 +1409,22 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         from gateway.run import _gateway_runner_ref
         runner = _gateway_runner_ref()
         if runner is not None:
-            _asyncio.create_task(runner.hooks.emit("a2a:send", {
+            hook_ctx = {
                 "agent": agent,
                 "message": padded_message,
                 "timestamp": time.time(),
                 "direction": "outbound",
-            }))
+            }
+            try:
+                loop = _asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop — create one just to fire the hook task, then close it
+                loop = _asyncio.new_event_loop()
+                _asyncio.set_event_loop(loop)
+                loop.run_until_complete(_asyncio.create_task(runner.hooks.emit("a2a:send", hook_ctx)))
+                loop.close()
+            else:
+                _asyncio.ensure_future(runner.hooks.emit("a2a:send", hook_ctx))
     except Exception:
         pass  # fully isolated — never blocks A2A delivery
 
