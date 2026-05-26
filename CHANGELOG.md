@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.22] - 2026-05-26
+
+### Bug Fix — PyPI Upload Had Old Broken Code
+
+- **v3.2.21 upload was a no-op**: The 3.2.21 wheel uploaded to PyPI contained the *old* broken code (pre-fix). The version number was bumped but the source was not rebuilt after the fix was committed. v3.2.22 is a proper rebuild of commit `24ff9c1` with the `emit` coroutine fix actually included.
+
 ## [3.2.21] - 2026-05-26
 
 ### Security Fix — SSRF Loopback Bypass
