@@ -75,26 +75,21 @@ def _fleet_agents_root() -> Path:
 
 
 def _is_local_fleet_agent(agent_name: str) -> bool:
-    """Returns True if agent is registered in the local fleet registry with a valid non-loopback URL."""
-    fleet_path = Path(os.environ.get("A2A_VAULT_PATH", str(Path.home() / ".hermes/fleet")))
-    registry_path = fleet_path / "fleet-registry.yaml"
-    if not registry_path.exists():
-        return False
+    """Returns True if agent is registered in the local fleet vault with a valid non-loopback URL.
+
+    Uses VaultResolver (same as a2a_list) rather than a stale fleet-registry.yaml file.
+    """
     try:
-        import yaml
-        with open(registry_path, encoding="utf-8") as f:
-            registry = yaml.safe_load(f) or {}
-        agents = registry.get("agents", {})
-        if agent_name not in agents:
-            return False
-        entry = agents[agent_name]
-        if isinstance(entry, dict):
-            registry_url = entry.get("url", "")
-        else:
-            registry_url = str(entry) if entry else ""
-        if registry_url:
-            _validate_target_url(registry_url, allow_loopback=True)
-        return True
+        from .identity import list_agents
+        agents = list_agents()
+        for agent in agents:
+            if agent.get("name", "").lower() == agent_name.lower():
+                url = agent.get("a2a_url", "") or ""
+                if url:
+                    # Validate the URL resolves to something real — allow loopback since it's local fleet
+                    _validate_target_url(url, allow_loopback=True)
+                    return True
+        return False
     except Exception:
         return False
 

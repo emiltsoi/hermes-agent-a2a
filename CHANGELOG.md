@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.21] - 2026-05-26
+
+### Security Fix — SSRF Loopback Bypass
+
+- **`_is_local_fleet_agent` SSRF bypass**: Fixed critical SSRF protection regression where `_is_local_fleet_agent` was reading from `~/.hermes/fleet/fleet-registry.yaml` which does not exist on this fleet, causing the function to always return `False`. This made `allow_loopback=False` for all local fleet agents, blocking all A2A loopback calls. Fixed by routing through `list_agents()` from identity.py (same vault resolver as `a2a_list`), correctly recognizing all registered local fleet agents as loopback-safe.
+- **Root cause**: The registry file path (`fleet-registry.yaml`) was stale — actual fleet data lives in per-profile `identity.yaml` files via `VaultResolver`.
+
 ## [3.2.12] - 2026-05-23
 
 ### Architecture — Telegram Float Decoupled via Gateway Hook
