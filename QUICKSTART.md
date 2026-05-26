@@ -290,6 +290,15 @@ The receiving Hermes gateway must support authenticated webhook-to-session routi
 
 The A2A plugin owns fleet identity lookup, HMAC signing, A2A envelopes, cancellation, and optional Telegram float via the `a2a:send` gateway hook. Hermes core should only provide generic webhook/session routing primitives.
 
+**Float env vars** — add to `~/.hermes/profiles/<agent>/.env`:
+
+```
+TELEGRAM_BOT_TOKEN=<your bot token>
+TELEGRAM_HOME_CHANNEL=<your chat ID>
+```
+
+For other Telegram token formats, the hook also accepts `HERMES_TELEGRAM_BOT_TOKEN` and `A2A_TELEGRAM_BOT_TOKEN`. For other chat ID formats, it also accepts `HERMES_TELEGRAM_DEFAULT_CHAT_ID` and `A2A_TELEGRAM_DEFAULT_CHAT_ID`.
+
 ## Troubleshooting
 
 ```text

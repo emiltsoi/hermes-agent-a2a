@@ -416,6 +416,151 @@ The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches tha
 
 The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and platform-independent session float via the `a2a:send` gateway hook. Drop a platform-specific hook handler (Telegram, Discord, etc.) to route floats to any channel. The gateway only needs to provide generic authenticated webhook-to-session routing.
 
+#### Hook Architecture
+
+When `a2a_send_session_message` delivers a message, the plugin emits an `a2a:send` gateway hook on the **sender's** gateway. Any hook registered for `a2a:send` fires — fire-and-forget, never blocking delivery. The sender's gateway is the right place because the sender's profile owns the bot token and target chat IDs for outbound routing.
+
+**Hook directory structure** — drop into `~/.hermes/hooks/<name>/`:
+
+```
+a2a-float/
+├── HOOK.yaml      # manifest (name, events)
+└── handler.py     # your platform-specific sender
+```
+
+**`HOOK.yaml`** — manifest declares the hook name and the events it subscribes to:
+
+```yaml
+name: a2a-float
+description: Telegram float for outbound A2A session messages
+events:
+  - a2a:send
+```
+
+**`handler.py`** — `handle(event_type, context)` receives:
+
+| Context key | Value |
+|---|---|
+| `agent` | sender agent name (e.g. `britney`) |
+| `message` | padded message text with envelope prefix |
+| `timestamp` | Unix timestamp of the send |
+| `direction` | always `"outbound"` |
+
+```python
+# handler.py
+import json, logging, os, urllib.request
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+RULES_PATH = os.path.join(os.path.dirname(__file__), "rules.yaml")
+
+def _in_hours_window(window: str) -> bool:
+    if not window:
+        return True
+    try:
+        start_str, end_str = window.split("-")
+        sh, sm = int(start_str[:2]), int(start_str[3:])
+        eh, em = int(end_str[:2]), int(end_str[3:])
+        now = datetime.utcnow()
+        cur_mins = now.hour * 60 + now.minute
+        start_mins = sh * 60 + sm
+        end_mins = eh * 60 + em
+        if start_mins <= end_mins:
+            return start_mins <= cur_mins <= end_mins
+        else:  # window crosses midnight
+            return cur_mins >= start_mins or cur_mins <= end_mins
+    except Exception:
+        return True
+
+def _should_float(sender: str, context: dict) -> bool:
+    try:
+        import yaml
+        with open(RULES_PATH, encoding="utf-8") as f:
+            rules = yaml.safe_load(f) or {}
+    except Exception:
+        return True
+    if not rules.get("float_all", True):
+        return False
+    allow_from = rules.get("allow_from", [])
+    if allow_from and sender not in allow_from:
+        return False
+    if not _in_hours_window(rules.get("hours", "00:00-23:59")):
+        return False
+    action_filter = rules.get("action_filter", [])
+    if action_filter:
+        if context.get("action", "do") not in action_filter:
+            return False
+    return True
+
+def _send_telegram(text: str) -> bool:
+    # Supports multiple env var names for broad compatibility
+    bot_token = os.getenv(
+        "HERMES_TELEGRAM_BOT_TOKEN",
+        os.getenv("A2A_TELEGRAM_BOT_TOKEN",
+        os.getenv("TELEGRAM_BOT_TOKEN", ""))
+    )
+    chat_id = os.getenv(
+        "HERMES_TELEGRAM_DEFAULT_CHAT_ID",
+        os.getenv("A2A_TELEGRAM_DEFAULT_CHAT_ID",
+        os.getenv("TELEGRAM_HOME_CHANNEL", ""))
+    )
+    if not bot_token or not chat_id:
+        logger.warning("[a2a-float] bot or chat_id not set — suppressed")
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = json.dumps({
+            "chat_id": str(chat_id),
+            "text": text,
+            "parse_mode": "HTML",
+        }, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode()).get("ok", False)
+    except Exception as exc:
+        logger.warning("[a2a-float] Telegram send failed: %s", exc)
+        return False
+
+def handle(event_type: str, context: dict) -> None:
+    if event_type != "a2a:send":
+        return
+    sender = context.get("agent", "unknown")
+    message = context.get("message", "")
+    if not message:
+        return
+    if _should_float(sender, context):
+        _send_telegram(message)
+```
+
+**`rules.yaml`** — per-profile float rules:
+
+```yaml
+float_all: true          # false = disable globally
+allow_from:             # empty = allow all senders
+  - britney
+  - linda
+  - agent0
+hours: "09:00-22:00"    # UTC window; empty = always on
+action_filter:          # empty = all actions
+  - do
+  - info
+```
+
+**Required env vars** — add to `~/.hermes/profiles/<agent>/.env`:
+
+```
+TELEGRAM_BOT_TOKEN=<your bot token>
+TELEGRAM_HOME_CHANNEL=<your chat ID>
+```
+
+**Hook discovery** — hooks are auto-discovered from `~/.hermes/hooks/<name>/` on gateway startup. One hook directory per event type. The gateway loads all hooks and fires them asynchronously on each matching event.
+
+---
+
 ### Recommended Cleanup Path for Hermes Core Patches
 
 The clean long-term split is:
@@ -453,7 +598,6 @@ Common variables:
 | `A2A_WEBHOOK_DELIVERY_TIMEOUT` | HTTP timeout in seconds for webhook delivery. Defaults to `10`. |
 | `A2A_WEBHOOK_REACHABILITY_CHECK` | Set `true` to validate webhook reachability before delivery. Defaults to `false`. |
 | `A2A_WEBHOOK_REACHABILITY_TIMEOUT` | Timeout in seconds for reachability check. Defaults to `5`. |
-| `A2A_FLOAT_ENABLED` | Set `false` to disable the `a2a:send` gateway hook float. Defaults to `true`. |
 
 **Metrics configuration:**
 
