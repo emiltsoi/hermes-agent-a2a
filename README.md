@@ -425,7 +425,8 @@ When `a2a_send_session_message` delivers a message, the plugin emits an `a2a:sen
 ```
 a2a-float/
 ├── HOOK.yaml      # manifest (name, events)
-└── handler.py     # your platform-specific sender
+├── handler.py     # your platform-specific sender
+└── rules.yaml     # per-profile float rules
 ```
 
 **`HOOK.yaml`** — manifest declares the hook name and the events it subscribes to:
@@ -446,13 +447,37 @@ events:
 | `timestamp` | Unix timestamp of the send |
 | `direction` | always `"outbound"` |
 
+> **Note:** This is one example implementation. The envelope parsing and Telegram formatting are fully customizable — adjust the regex, output format, and routing logic to match your fleet's conventions and visual preferences.
+
 ```python
 # handler.py
-import json, logging, os, urllib.request
+# This is one example implementation. Adjust the envelope parsing and Telegram
+# formatting to suit your fleet's conventions and visual preferences.
+import json, logging, os, re, urllib.request
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 RULES_PATH = os.path.join(os.path.dirname(__file__), "rules.yaml")
+
+# A2A envelope format:
+# "⬡ [A2A from:<sender> to:<recipient>][id:<msgid>][ref:<refid>][action:<action>][reply:<reply>]"
+_ENVELOPE_RE = re.compile(
+    r"^\u25e1 \[A2A from:(?P<from>\S+) to:(?P<to>\S+)\]"
+    r"(?:\[id:(?P<id>\S+)\])?"
+    r"(?:\[ref:(?P<ref>\S+)\])?"
+    r"(?:\[action:(?P<action>\S+)\])?"
+    r"(?:\[reply:(?P<reply>\S+)\])?"
+    r"\s*"
+)
+
+def _strip_envelope(text: str) -> str:
+    """Remove the A2A envelope header, leaving just the message body."""
+    m = _ENVELOPE_RE.match(text)
+    return text[m.end():].strip() if m else text
+
+def _format_for_telegram(sender: str, body: str) -> str:
+    """Format the Telegram message. Here: bold sender + body on one line."""
+    return f"\u25e1 <b>{sender}:</b> {body}"
 
 def _in_hours_window(window: str) -> bool:
     if not window:
@@ -493,7 +518,6 @@ def _should_float(sender: str, context: dict) -> bool:
     return True
 
 def _send_telegram(text: str) -> bool:
-    # Supports multiple env var names for broad compatibility
     bot_token = os.getenv(
         "HERMES_TELEGRAM_BOT_TOKEN",
         os.getenv("A2A_TELEGRAM_BOT_TOKEN",
@@ -533,22 +557,21 @@ def handle(event_type: str, context: dict) -> None:
     if not message:
         return
     if _should_float(sender, context):
-        _send_telegram(message)
+        body = _strip_envelope(message)
+        telegram_text = _format_for_telegram(sender, body)
+        _send_telegram(telegram_text)
 ```
 
 **`rules.yaml`** — per-profile float rules:
 
 ```yaml
 float_all: true          # false = disable globally
-allow_from:             # empty = allow all senders
-  - britney
-  - linda
-  - agent0
-hours: "09:00-22:00"    # UTC window; empty = always on
-action_filter:          # empty = all actions
-  - do
-  - info
+allow_from: []           # empty = allow all senders; e.g. [britney, linda, agent0]
+hours: "00:00-23:59"    # UTC window; empty = always on
+action_filter: []        # empty = all actions; e.g. [do, info]
 ```
+
+> **Tip:** To restrict floats to certain hours, change `hours` to e.g. `"09:00-22:00"`. To allow only specific senders, add them to `allow_from`.
 
 **Required env vars** — add to `~/.hermes/profiles/<agent>/.env`:
 
@@ -663,7 +686,7 @@ python3 -m pytest
 
 ## Repository layout
 
-```text
+```
 hermes_agent_a2a/
   plugin.py           # plugin registration and server lifecycle
   server.py           # inbound A2A JSON-RPC server

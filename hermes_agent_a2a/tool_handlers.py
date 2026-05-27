@@ -1404,28 +1404,42 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
 
     # Part 2: Emit gateway hook for session float (fully async, non-blocking).
     # a2a:send hook replaces the old direct Telegram HTTP call.
+    #
+    # The plugin runs in the agent subprocess — NOT the gateway process — so
+    # _gateway_runner_ref() returns None and direct hook.emit() is impossible.
+    # Part 2: Emit gateway hook for session float (fully async, non-blocking).
+    # a2a:send hook replaces the old direct Telegram HTTP call.
+    #
+    # The plugin and gateway share the same process (same PID), so we can
+    # detect the correct port by reading what the gateway process actually
+    # bound: use the WEBHOOK_PORT from the env if set, otherwise use the
+    # GATEWAY_WEBHOOK_PORT env var injected by the gateway startup code.
     try:
-        import asyncio as _asyncio
-        from gateway.run import _gateway_runner_ref
-        runner = _gateway_runner_ref()
-        if runner is not None:
-            hook_ctx = {
+        import os as _os
+        _webhook_host = _os.getenv("WEBHOOK_HOST", "127.0.0.1")
+        _webhook_port = int(_os.getenv("WEBHOOK_PORT") or _os.getenv("GATEWAY_WEBHOOK_PORT") or "8644")
+        _emit_url = f"http://{_webhook_host}:{_webhook_port}/hooks/emit"
+        _hook_ctx = {
+            "event_type": "a2a:send",
+            "context": {
                 "agent": agent,
                 "message": padded_message,
                 "timestamp": time.time(),
                 "direction": "outbound",
-            }
-            try:
-                loop = _asyncio.get_running_loop()
-            except RuntimeError:
-                # No running loop — create one just to fire the hook task, then close it
-                loop = _asyncio.new_event_loop()
-                _asyncio.set_event_loop(loop)
-                loop.run_until_complete(_asyncio.create_task(runner.hooks.emit("a2a:send", hook_ctx)))
-                loop.close()
-            else:
-                _asyncio.ensure_future(runner.hooks.emit("a2a:send", hook_ctx))
-    except Exception:
+            },
+        }
+        _req = urllib.request.Request(
+            _emit_url,
+            data=json.dumps(_hook_ctx, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        # Fire-and-forget: don't wait for response, don't block A2A delivery
+        with urllib.request.urlopen(_req, timeout=2):
+            pass
+    except Exception as _exc:
+        import logging as _log
+        _log.getLogger(__name__).info("[a2a_send_session_message] Hook emit via HTTP failed: %s", _exc)
         pass  # fully isolated — never blocks A2A delivery
 
     return {

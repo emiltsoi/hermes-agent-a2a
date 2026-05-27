@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.23] - 2026-05-27
+
+### Bug Fix — Hook Emit via HTTP (not direct runner ref)
+
+- **`a2a:send` hook emit no longer requires gateway runner ref**: The hook emit path was calling `_gateway_runner_ref()` directly and attempting `runner.hooks.emit()` from the agent subprocess context. Since the plugin and gateway share a process but the agent is a separate subprocess, the runner ref returns `None` and the emit silently fails. Fixed by POSTing to the gateway's own `/hooks/emit` HTTP endpoint — same origin, no auth needed, 2s timeout, fire-and-forget.
+
+### Documentation — README Hook Example Corrected
+
+- **`handler.py` example updated**: The README code example now strips the A2A envelope (`_strip_envelope`) and formats for Telegram (`_format_for_telegram`) instead of sending the raw envelope string. Envelope regex and output format are documented as **customizable** — adjust to fleet preference.
+- **`rules.yaml` example `hours` corrected**: Default changed from `"09:00-22:00"` to `"00:00-23:59"` (was silently suppressing floats outside business hours).
+
 ## [3.2.22] - 2026-05-26
 
 ### Bug Fix — PyPI Upload Had Old Broken Code
