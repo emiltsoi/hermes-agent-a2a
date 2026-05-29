@@ -288,7 +288,7 @@ The receiving Hermes gateway must support authenticated webhook-to-session routi
 - webhook source/session override through route `source`
 - allowlist bypass for HMAC-authenticated `webhook:` sources
 
-The A2A plugin owns fleet identity lookup, HMAC signing, A2A envelopes, cancellation, and optional Telegram float via the `a2a:send` gateway hook. Hermes core should only provide generic webhook/session routing primitives.
+The A2A plugin owns fleet identity lookup, HMAC signing, A2A envelopes, cancellation, and session float via webhook delivery. Hermes core provides generic webhook/session routing primitives.
 
 **Float env vars** — add to `~/.hermes/profiles/<agent>/.env`:
 

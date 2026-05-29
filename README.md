@@ -1,6 +1,6 @@
 # Hermes Agent A2A
 
-`hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, session relay with gateway hook support, and fleet metrics — all Hermes-specific, not fleet-agnostic.
+`hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, session relay via webhook delivery, and fleet metrics — all Hermes-specific, not fleet-agnostic.
 
 ## Capabilities
 
@@ -414,11 +414,13 @@ The `a2a_send_session_message` tool (mode 4) requires Hermes gateway patches tha
 - `gateway/platforms/base.py`: +2 lines for `_platform` override in `build_source()`
 - `gateway/run.py`: +6 lines for webhook allowlist bypass
 
-The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and platform-independent session float via the `a2a:send` gateway hook. Drop a platform-specific hook handler (Telegram, Discord, etc.) to route floats to any channel. The gateway only needs to provide generic authenticated webhook-to-session routing.
+The plugin owns A2A identity resolution, HMAC request signing, message envelope construction, and session float via webhook delivery. Drop a platform-specific hook handler (Telegram, Discord, etc.) to extend outbound routing. The gateway only needs to provide generic authenticated webhook-to-session routing.
 
 #### Hook Architecture
 
-When `a2a_send_session_message` delivers a message, the plugin emits an `a2a:send` gateway hook on the **sender's** gateway. Any hook registered for `a2a:send` fires — fire-and-forget, never blocking delivery. The sender's gateway is the right place because the sender's profile owns the bot token and target chat IDs for outbound routing.
+When `a2a_send_session_message` delivers a message, the plugin emits an `a2a:send` gateway hook on the **sender's** gateway (fire-and-forget, non-blocking). A hook handler registered for `a2a:send` can optionally handle outbound routing — e.g., a Telegram float handler.
+
+The sender's gateway is the right place because the sender's profile owns the bot token and target chat IDs for outbound routing. Drop a platform-specific hook handler (Telegram, Discord, etc.) to route floats to any channel.
 
 **Hook directory structure** — drop into `~/.hermes/hooks/<name>/`:
 
@@ -521,7 +523,7 @@ def _send_telegram(text: str) -> bool:
     bot_token = os.getenv(
         "HERMES_TELEGRAM_BOT_TOKEN",
         os.getenv("A2A_TELEGRAM_BOT_TOKEN",
-        os.getenv("TELEGRAM_BOT_TOKEN", ""))
+        os.getenv("TELEGRAM_BOT_TOKEN", "")))
     )
     chat_id = os.getenv(
         "HERMES_TELEGRAM_DEFAULT_CHAT_ID",
@@ -584,17 +586,22 @@ TELEGRAM_HOME_CHANNEL=<your chat ID>
 
 ---
 
+### Session Float via Webhook Delivery
+
+The primary session relay mechanism is webhook delivery: `a2a_send_session_message` POSTs the A2A envelope to the target agent's webhook endpoint, and the target's gateway routes it into the configured session. This works without any hook handler registered.
+
+The `a2a:send` hook is an optional extension point for outbound routing (e.g., a Telegram float) on top of the core webhook delivery path.
+
 ### Recommended Cleanup Path for Hermes Core Patches
 
 The clean long-term split is:
 
 - Keep generic gateway primitives upstream: authenticated webhook routes, `target_session`, cross-platform delivery, source/session overrides, idempotency, and rate limiting.
 - Rename private/core-facing arguments such as `_platform` to a public `platform_override` or route-level `source.platform`.
-- Replace A2A-specific gateway logic such as `_load_a2a_agents()` and `_deliver_a2a()` with plugin-owned registry and protocol calls.
-- Avoid A2A-specific payload flags in core webhook code. Prefer generic route modes such as `execution: agent_async`, `response_mode: none`, or `delivery: platform_session`.
 - Keep cancellation, A2A JSON-RPC, and fleet identity semantics inside this plugin.
+- `_deliver_a2a()` lives in the gateway (added by patches/main) and handles A2A webhook-to-agent delivery; this is acceptable as core gateway logic since it routes incoming webhooks to the agent runtime.
 
-Until those gateway primitives are upstreamed, deployments using session relay need a Hermes build that includes the webhook `target_session` and HMAC-authenticated webhook-session routing behavior shown above.
+Until those gateway primitives are upstreamed, deployments using session relay need a Hermes build that includes the webhook `target_session`, `_platform` override, and HMAC-authenticated webhook-session routing behavior shown above.
 
 ## Runtime environment
 
