@@ -1402,33 +1402,38 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     else:
         return {"error": f"Agent '{agent}' has no webhook_url in vault"}
 
-    # Part 2: Emit gateway hook for session float (fully async, non-blocking).
-    # a2a:send hook replaces the old direct Telegram HTTP call.
-    # Reverted from HTTP POST (024460c) back to direct runner.hooks.emit().
-    # Requires patches/main gateway patches which register the a2a:send handler.
+    # Part 2: Telegram float — call directly since hook emit requires a running loop
+    # that isn't available in this sync tool context. Bypasses the hook system for float.
     try:
-        import asyncio as _asyncio
-        from gateway.run import _gateway_runner_ref
-        runner = _gateway_runner_ref()
-        if runner is not None:
-            hook_ctx = {
-                "agent": agent,
-                "message": padded_message,
-                "timestamp": time.time(),
-                "direction": "outbound",
-            }
-            try:
-                loop = _asyncio.get_running_loop()
-            except RuntimeError:
-                # No running loop — create one just to fire the hook task, then close it
-                loop = _asyncio.new_event_loop()
-                _asyncio.set_event_loop(loop)
-                loop.run_until_complete(_asyncio.create_task(runner.hooks.emit("a2a:send", hook_ctx)))
-                loop.close()
-            else:
-                _asyncio.ensure_future(runner.hooks.emit("a2a:send", hook_ctx))
-    except Exception:
-        pass  # fully isolated — never blocks A2A delivery
+        import json as _json, urllib.request as _urllib
+        _bot = (
+            os.getenv("HERMES_TELEGRAM_BOT_TOKEN")
+            or os.getenv("A2A_TELEGRAM_BOT_TOKEN")
+            or os.getenv("TELEGRAM_BOT_TOKEN", "")
+        )
+        _chat = (
+            os.getenv("HERMES_TELEGRAM_DEFAULT_CHAT_ID")
+            or os.getenv("A2A_TELEGRAM_DEFAULT_CHAT_ID")
+            or os.getenv("TELEGRAM_HOME_CHANNEL", "")
+        )
+        if _bot and _chat:
+            _text = f"\u25e1 <b>{'britney'}:</b> {padded_message}"
+            _payload = _json.dumps({"chat_id": str(_chat), "text": _text, "parse_mode": "HTML"}, ensure_ascii=False).encode("utf-8")
+            _req = _urllib.Request(
+                f"https://api.telegram.org/bot{_bot}/sendMessage",
+                data=_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with open("/tmp/a2a-float-debug.log", "a") as _f:
+                _f.write(f"[{time.strftime('%H:%M:%S')}] sending telegram float: {_text[:60]}\n")
+            with _urllib.urlopen(_req, timeout=10) as _resp:
+                _ok = _json.loads(_resp.read().decode()).get("ok", False)
+                with open("/tmp/a2a-float-debug.log", "a") as _f:
+                    _f.write(f"[{time.strftime('%H:%M:%S')}] telegram float result: {_ok}\n")
+    except Exception as _e:
+        with open("/tmp/a2a-float-debug.log", "a") as _f:
+            _f.write(f"[{time.strftime('%H:%M:%S')}] telegram float exception: {_e}\n")
 
     return {
         "task_id": task_id,
