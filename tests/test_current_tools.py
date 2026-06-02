@@ -1335,8 +1335,8 @@ def test_load_a2a_agents_handles_missing_config_gracefully(tmp_path, monkeypatch
 
 
 def test_call_a2a_direct_builds_correct_json_rpc_payload():
-    """Plugin self-containment: _call_a2a_direct() must build valid JSON-RPC 2.0 payload."""
-    from hermes_agent_a2a.server import _call_a2a_direct
+    """Plugin self-containment: a2a_direct.call() must build valid JSON-RPC 2.0 payload."""
+    from hermes_agent_a2a.a2a_direct import call
     from unittest.mock import patch, MagicMock
     import json
 
@@ -1347,7 +1347,7 @@ def test_call_a2a_direct_builds_correct_json_rpc_payload():
     mock_response.__exit__ = lambda self, *args: None
 
     with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
-        result = _call_a2a_direct(
+        result = call(
             url="http://127.0.0.1:41808/a2a",
             message="hello",
             task_id="task-123",
@@ -1370,13 +1370,13 @@ def test_call_a2a_direct_builds_correct_json_rpc_payload():
 
 
 def test_call_a2a_direct_handles_http_errors():
-    """Plugin self-containment: _call_a2a_direct() must return error dict on HTTP failure."""
-    from hermes_agent_a2a.server import _call_a2a_direct
+    """Plugin self-containment: a2a_direct.call() must return error dict on HTTP failure."""
+    from hermes_agent_a2a.a2a_direct import call
     from unittest.mock import patch
     from urllib.error import HTTPError
 
     with patch("urllib.request.urlopen", side_effect=HTTPError(None, 404, "Not Found", None, None)):
-        result = _call_a2a_direct(
+        result = call(
             url="http://127.0.0.1:41808/a2a",
             message="hello",
             task_id="task-123"
@@ -1388,11 +1388,11 @@ def test_call_a2a_direct_handles_http_errors():
 
 def test_trigger_webhook_uses_direct_a2a_when_flag_set():
     """Plugin self-containment: _trigger_webhook() must use direct A2A when use_direct_a2a=True."""
-    from hermes_agent_a2a.server import _trigger_webhook, _call_a2a_direct
+    from hermes_agent_a2a.server import _trigger_webhook
     from unittest.mock import patch
 
-    # Mock _call_a2a_direct to verify it's called
-    with patch("hermes_agent_a2a.server._call_a2a_direct", return_value={"result": "ok"}) as mock_direct:
+    # Mock a2a_direct.call to verify it's called
+    with patch("hermes_agent_a2a.server.call", return_value={"result": "ok"}) as mock_direct:
         _trigger_webhook(
             message="test message",
             task_id="task-123",

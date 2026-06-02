@@ -43,6 +43,7 @@ from .push_delivery import (
     list_push_configs,
     delete_push_config,
 )
+from .a2a_direct import call, call_async
 
 
 def _validate_webhook_host(host: str) -> str:
@@ -418,7 +419,7 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
     """
     # Use direct A2A for modes 1,2,3 (protocol tasks, workers)
     if use_direct_a2a and target_url:
-        result = _call_a2a_direct(target_url, message, task_id, auth_token)
+        result = call(target_url, message, task_id, auth_token)
         if "error" in result:
             logger.warning("[A2A] Direct A2A call failed: %s", result["error"])
             if on_failure:
@@ -487,62 +488,9 @@ def _trigger_webhook(message: str = "", task_id: str = "", mode: str = None, del
         on_failure(task_id)
 
 
-def _call_a2a_direct(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10) -> dict:
-    """Make a direct A2A JSON-RPC call to an agent.
-
-    NOTE: Must use A2A spec format (params.message.role/parts/metadata) via build_task_send_payload.
-    The non-spec format (params.task.text) causes "Empty message" errors on recipients.
-    Previous revert (f539a9d) was incorrect; spec format is required for compatibility.
-
-    Args:
-        url: Target agent's A2A endpoint (e.g., http://127.0.0.1:41808/a2a)
-        message: The message to send
-        task_id: Unique task identifier
-        auth_token: Optional bearer token for authentication
-        timeout: HTTP timeout in seconds
-
-    Returns:
-        Response dict with 'result' or 'error' key
-    """
-    from .a2a_spec.tasks import build_task_send_payload
-    from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
-    payload = build_task_send_payload(
-        task_id=task_id,
-        message=message,
-        sender_name=from_agent,
-        intent="consultation",
-        expected_action="reply",
-    )
-    body = json.dumps(payload, ensure_ascii=False).encode()
-    headers = {"Content-Type": "application/json"}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            response_data = json.loads(resp.read().decode())
-            if "result" in response_data:
-                return {"result": response_data["result"], "task_id": task_id}
-            elif "error" in response_data:
-                return {"error": response_data["error"], "task_id": task_id}
-            return {"error": "Invalid response", "task_id": task_id}
-    except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}: {e.reason}", "task_id": task_id}
-    except urllib.error.URLError as e:
-        return {"error": f"URL error: {e.reason}", "task_id": task_id}
-    except Exception as e:
-        return {"error": str(e), "task_id": task_id}
-
-
 def _urlopen_with_status(req, timeout):
     """Open a URL and return the response object. Used via asyncio.to_thread."""
     return urllib.request.urlopen(req, timeout=timeout)
-
-
-async def _call_a2a_direct_async(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10) -> dict:
-    """Async wrapper for _call_a2a_direct — runs blocking I/O in a thread pool."""
-    return await asyncio.to_thread(_call_a2a_direct, url, message, task_id, auth_token, timeout)
 
 
 async def _trigger_webhook_async(message: str = "", task_id: str = "", mode: str = None, deliver_only: bool = False, retries=None, base_delay=None, on_failure=None, use_direct_a2a: bool = False, target_url: str = "", auth_token: str = ""):
@@ -552,7 +500,7 @@ async def _trigger_webhook_async(message: str = "", task_id: str = "", mode: str
     blocking the event loop with urllib.request.urlopen calls.
     """
     if use_direct_a2a and target_url:
-        result = await _call_a2a_direct_async(target_url, message, task_id, auth_token)
+        result = await call_async(target_url, message, task_id, auth_token)
         if "error" in result:
             logger.warning("[A2A] Direct A2A call failed: %s", result["error"])
             if on_failure:
