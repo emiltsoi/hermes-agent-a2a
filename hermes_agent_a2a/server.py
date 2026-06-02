@@ -35,7 +35,6 @@ from .a2a_spec.push import (
     ListTaskPushNotificationConfigsRequest,
     ListTaskPushNotificationConfigsResponse,
     DeleteTaskPushNotificationConfigRequest,
-    DeleteTaskPushNotificationConfigResponse,
     AuthenticationInfo,
 )
 from .push_delivery import (
@@ -87,6 +86,26 @@ _A2A_EXTENSIONS_ENV = os.getenv("A2A_EXTENSIONS", "")
 def _get_a2a_extensions() -> str:
     """Return A2A-Extensions header value (comma-separated URIs or empty string)."""
     return _A2A_EXTENSIONS_ENV.strip()
+
+
+def _start_async_webhook_delivery(task_id: str) -> None:
+    """Fire-and-forget webhook delivery for a task. Closes over the on_failure
+    callback that marks the task as failed-delivery. Used by the three call
+    sites that previously duplicated the closure+thread pattern. (LOW-07,
+    a2a-review-20260602)
+    """
+    def _on_webhook_failure(tid: str) -> None:
+        t = _ensure_task_queue().find_task_by_id(tid)
+        if t is not None and t.response is None:
+            t.response = "(webhook delivery failed)"
+            t.ready.set()
+
+    def _run_async_webhook():
+        asyncio.run(_trigger_webhook_async(
+            task_id=task_id, deliver_only=True, on_failure=_on_webhook_failure
+        ))
+
+    threading.Thread(target=_run_async_webhook, daemon=True).start()
 
 
 class _PendingTask:
@@ -664,7 +683,6 @@ def _build_message_object(text: str, role: int = 2, message_id: Optional[str] = 
         role: Role enum value (1=USER, 2=AGENT). Default AGENT since this is server response.
         message_id: Optional message ID. If not provided, a UUID is generated.
     """
-    from .a2a_spec.tasks import Role
     return {
         "message_id": message_id or str(uuid.uuid4()),
         "role": role,
@@ -729,7 +747,7 @@ def _build_task_list_item(task: "_PendingTask", state: str) -> dict:
         task_id=task.task_id,
         state=state,
         context_id=task.context_id,
-        response=task.response,
+        response=filtered,
         created_at=task.created_at,
     )
     return item
@@ -1251,9 +1269,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         # Extract SendMessageConfiguration fields per a2a.proto:143-161
         return_immediately = configuration.get("return_immediately", False)
-        accepted_output_modes = configuration.get("accepted_output_modes")
         push_config = configuration.get("task_push_notification_config")
-        history_length = configuration.get("history_length")
+        # NOTE: accepted_output_modes and history_length are accepted per spec
+        # but not yet wired into local-task handling. See MED-03/LOW-03 notes
+        # in the review (a2a-review-20260602) — the assignments were F841 dead
+        # locals, removed.
 
         if push_config:
             logger.debug("[A2A] SendMessageConfiguration task_push_notification_config not yet implemented for local tasks")
@@ -1359,18 +1379,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # the webhook handler to invoke the agent without routing to Telegram.
         # The agent's pre_llm_call hook drains the shared task queue, processes
         # the task, and post_llm_call marks it complete.
-        def _on_webhook_failure(tid: str) -> None:
-            t = _ensure_task_queue().find_task_by_id(tid)
-            if t is not None and t.response is None:
-                t.response = "(webhook delivery failed)"
-                t.ready.set()
-
-        def _run_async_webhook():
-            asyncio.run(_trigger_webhook_async(
-                task_id=task_id, deliver_only=True, on_failure=_on_webhook_failure
-            ))
-
-        threading.Thread(target=_run_async_webhook, daemon=True).start()
+        _start_async_webhook_delivery(task_id)
 
         # Per SendMessageConfiguration.return_immediately (a2a.proto:143-161):
         # If True, return immediately without waiting for task completion.
@@ -1669,7 +1678,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                     409,
                 )
                 return
-            worker_canceled = cancel_worker(tid)
+            logger.debug("worker_cancel for %s: %s", tid, cancel_worker(tid))
             _ensure_task_queue().cancel(tid)
             result = _build_task_object(task_id=tid, state="canceled")
         elif method == "SubscribeToTask":
@@ -1767,7 +1776,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 409,
             )
             return
-        worker_canceled = cancel_worker(task_id)
+        logger.debug("worker_cancel for %s: %s", task_id, cancel_worker(task_id))
         _ensure_task_queue().cancel(task_id)
         # Build full proto-compliant Task per a2a.proto:163-183
         result = _build_task_object(task_id=task_id, state="canceled")
@@ -1928,18 +1937,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        def _on_webhook_failure(tid: str) -> None:
-            t = _ensure_task_queue().find_task_by_id(tid)
-            if t is not None and t.response is None:
-                t.response = "(webhook delivery failed)"
-                t.ready.set()
-
-        def _run_async_webhook():
-            asyncio.run(_trigger_webhook_async(
-                task_id=task_id, deliver_only=True, on_failure=_on_webhook_failure
-            ))
-
-        threading.Thread(target=_run_async_webhook, daemon=True).start()
+        _start_async_webhook_delivery(task_id)
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 
@@ -2013,18 +2011,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         streamer = get_sse_streamer()
         stream_id = streamer.open_stream(task_id)
 
-        def _on_webhook_failure(tid: str) -> None:
-            t = _ensure_task_queue().find_task_by_id(tid)
-            if t is not None and t.response is None:
-                t.response = "(webhook delivery failed)"
-                t.ready.set()
-
-        def _run_async_webhook():
-            asyncio.run(_trigger_webhook_async(
-                task_id=task_id, deliver_only=True, on_failure=_on_webhook_failure
-            ))
-
-        threading.Thread(target=_run_async_webhook, daemon=True).start()
+        _start_async_webhook_delivery(task_id)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")

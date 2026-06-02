@@ -44,7 +44,12 @@ class SubscriptionStore:
         Returns the new subscription_id.
         """
         with self._lock:
-            # Lazy cleanup: only when >10 expired subscriptions exist
+            # Lazy cleanup: only when >10 expired subscriptions exist.
+            # Note: this pattern relies on write traffic. If the server receives
+            # fewer than 11 add() calls per max_age window (default 1h), no
+            # cleanup runs and stale subscriptions accumulate. A periodic cleanup
+            # thread (matching SSEStreamer's pattern) would close this gap if
+            # low-traffic scenarios become a real concern.
             if len(self._store) > 10:
                 self._cleanup_expired_locked()
 

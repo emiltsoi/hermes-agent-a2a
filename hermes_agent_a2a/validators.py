@@ -17,6 +17,14 @@ class BootValidator:
         """Run health checks. Raises RuntimeError on any failure."""
         self._check_bot_token(identity)
         self._check_chat_id(identity)
+        # Live-check the token against Telegram /getMe — catches expired/revoked
+        # tokens that the string check above cannot detect. Fail-fast at boot
+        # beats silent degradation on the first A2A float. The method handles
+        # transient API errors internally (logs warning, returns) so a Telegram
+        # outage does not block boot.
+        bot_token = str(identity.get("platforms", {}).get("telegram", {}).get("bot_token", "")).strip()
+        if bot_token and not (bot_token.startswith("${") or "}" in bot_token):
+            self.validate_token_with_telegram(bot_token)
         logger.info("[BootValidator] all checks passed")
 
     def _check_bot_token(self, identity: dict) -> None:

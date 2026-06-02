@@ -805,6 +805,10 @@ def _handle_call_mode2(
         return {"error": f"Mode 2 worker timed out after {timeout}s"}
     finally:
         unregister_worker(task_id)
+        # Match Mode 3 (see line ~890): clean up any zombies that may have
+        # accumulated across the worker process boundary. (LOW-06)
+        from .worker_registry import cleanup_zombie_processes
+        cleanup_zombie_processes()
 
     if proc is None or proc.returncode != 0:
         err = stderr.strip() if proc else "process not started"
@@ -1268,14 +1272,11 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     if not agent:
         return {"error": "'agent' is required"}
 
-    # Own bot_token: resolve from caller's own vault via VaultResolver.
-    # Used for sender-side visibility echo (non-fatal).
-    try:
-        own_vault = _vault().resolve()
-    except RuntimeError:
-        own_vault = {}
-
-    own_bot_token = own_vault.get("platforms", {}).get("telegram", {}).get("bot_token", "")
+    # Own bot_token is no longer resolved here. The Telegram float path at
+    # the bottom of this function reads env vars (HERMES_TELEGRAM_BOT_TOKEN /
+    # A2A_TELEGRAM_BOT_TOKEN / TELEGRAM_BOT_TOKEN) directly. The vault-resolved
+    # lookup was dead code — the result was assigned and never used.
+    # (MED-04, a2a-review-20260602)
 
     # Target delivery: route to target gateway webhook. The target gateway's
     # config.yaml owns target_session/deliver_extra and resolves the message
@@ -1405,7 +1406,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     # Part 2: Telegram float — call directly since hook emit requires a running loop
     # that isn't available in this sync tool context. Bypasses the hook system for float.
     try:
-        import json as _json, urllib.request as _urllib
+        import json as _json
+        import urllib.request as _urllib
         _bot = (
             os.getenv("HERMES_TELEGRAM_BOT_TOKEN")
             or os.getenv("A2A_TELEGRAM_BOT_TOKEN")
@@ -1425,15 +1427,12 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            with open("/tmp/a2a-float-debug.log", "a") as _f:
-                _f.write(f"[{time.strftime('%H:%M:%S')}] sending telegram float: {_text[:60]}\n")
+            logger.debug("sending telegram float: %s", _text[:60])
             with _urllib.urlopen(_req, timeout=10) as _resp:
                 _ok = _json.loads(_resp.read().decode()).get("ok", False)
-                with open("/tmp/a2a-float-debug.log", "a") as _f:
-                    _f.write(f"[{time.strftime('%H:%M:%S')}] telegram float result: {_ok}\n")
+                logger.debug("telegram float result: %s", _ok)
     except Exception as _e:
-        with open("/tmp/a2a-float-debug.log", "a") as _f:
-            _f.write(f"[{time.strftime('%H:%M:%S')}] telegram float exception: {_e}\n")
+        logger.debug("telegram float exception: %s", _e)
 
     return {
         "task_id": task_id,
@@ -1492,7 +1491,13 @@ def _format_metrics_for_telegram(metrics: dict) -> str:
     return "\n".join(lines)
 
 
-def _handle_a2a_metrics_command(raw_args: str) -> str | None:
-    """Telegram slash command handler for /a2a-metrics."""
+def _handle_a2a_metrics_command(_raw_args: str) -> str | None:
+    """Telegram slash command handler for /a2a-metrics.
+
+    `_raw_args` is intentionally unused — slash commands may pass args, and
+    the parameter is reserved for a future subset-selection extension. The
+    underscore prefix marks it as intentionally unused per Python convention.
+    (LOW-02, a2a-review-20260602)
+    """
     metrics = handle_get_metrics()
     return _format_metrics_for_telegram(metrics)

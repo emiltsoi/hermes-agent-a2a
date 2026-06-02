@@ -221,55 +221,11 @@ class SSEStreamer:
                 stream.pending.clear()
                 return lines
 
-    def get_last_event_id(self, stream_id: str) -> Optional[str]:
-        """Return the last SSE event ID sent on a stream, or None if no events sent."""
-        with self._lock:
-            stream = self._streams.get(stream_id)
-            return stream.last_id if stream else None
-
-    def get_pending_after_id(self, stream_id: str, after_id: str) -> list[str]:
-        """Return pending SSE lines for a stream with id strictly greater than after_id.
-
-        Used for SSE stream resumption: when a client reconnects with a Last-Event-ID
-        header, call this to fetch only events emitted after that point.
-
-        Does NOT clear the returned lines — callers must also call get_pending()
-        to consume them after replay.
-
-        Returns events whose SSE id field (e.g. ``task_id_N``) is lexicographically
-        greater than after_id.
-        """
-        with self._lock:
-            stream = self._streams.get(stream_id)
-            if stream is None:
-                return []
-            with stream.pending_lock:
-                # Filter to lines with an id: field lexicographically after after_id.
-                # The SSE line format is: "id: <event_id>\n..."  — we scan all pending
-                # lines and keep those whose id value > after_id.
-                result = []
-                for line in stream.pending:
-                    if line.startswith("id: "):
-                        # Extract the id value (up to the newline)
-                        line_id = line.split("id: ", 1)[1].split("\n")[0].strip()
-                        if line_id > after_id:
-                            result.append(line)
-                    else:
-                        # Lines without an id field are always replayed
-                        result.append(line)
-                return result
-
     def is_closed(self, stream_id: str) -> bool:
         """Return True if the stream has been closed."""
         with self._lock:
             stream = self._streams.get(stream_id)
             return stream is None or stream.closed
-
-    def get_stream_task_id(self, stream_id: str) -> Optional[str]:
-        """Return the task_id for a stream, or None if not found."""
-        with self._lock:
-            stream = self._streams.get(stream_id)
-            return stream.task_id if stream else None
 
     def get_stream_ids_for_task(self, task_id: str) -> list[str]:
         """Return all open stream_ids for a task."""

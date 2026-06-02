@@ -9,8 +9,34 @@ import sys
 import os
 import json
 import uuid
+import signal
 
 MAX_STDIN_BYTES = 1 * 1024 * 1024  # 1 MB hard limit
+
+
+def _enforce_timeout(seconds: int) -> None:
+    """Wall-clock budget for the entire worker invocation.
+
+    The parent passes a per-task `timeout` field. Without this handler, the
+    field is accepted on stdin and silently discarded — the worker's LLM loop
+    would only be bounded by `AIAgent.max_iterations`, not the caller's
+    intended wall-clock budget. signal.alarm() fires SIGALRM in the main
+    thread after N seconds, raising TimeoutError.
+
+    Layering: this is a SOFT wall-clock (depends on the LLM call running in
+    the main thread; SIGALRM only fires there). The HARD wall-clock is the
+    parent's `proc.communicate(..., timeout=...)` at tool_handlers.py:800,
+    which kills the subprocess regardless of which thread is running. If
+    `AIAgent` is later refactored to use a thread pool for the LLM call,
+    SIGALRM will no longer interrupt it — the hard wall-clock still works.
+    """
+    def _on_alarm(signum, frame):
+        raise TimeoutError(
+            f"Mode 2 worker exceeded {seconds}s wall-clock budget"
+        )
+    signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(seconds)
+
 
 def main():
     raw = sys.stdin.buffer.read(MAX_STDIN_BYTES + 1)
@@ -23,7 +49,8 @@ def main():
 
     agent_home = params["agent_home"]
     message = params["message"]
-    timeout = params.get("timeout", 300)
+    timeout = int(params.get("timeout", 300))
+    _enforce_timeout(timeout)
 
     # Resolve HERMES_HOME from params or environment — must be explicit for Mode 2.
     # Inherit HERMES_HOME from parent environment if not passed in params.
