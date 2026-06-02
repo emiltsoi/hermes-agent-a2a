@@ -3,6 +3,12 @@
 Ported from v1, replacing vault/identity loading with VaultResolver from .identity.
 All paths derived from HERMES_HOME env var (defaults to ~/.hermes).
 
+The `user_task` parameter is a shared convention across tool handlers — the LLM
+can pass a label for correlation/tracing, and handlers accept-but-ignore. This
+preserves a stable contract for the LLM across tools without forcing each
+handler to do something with the value. Per-handler docstrings note the
+"passed through, not used for filtering" pattern. (LOW-05, a2a-review-20260602)
+
 Ehrlich & Lindstrom — HermesA2A 2026.
 """
 import json
