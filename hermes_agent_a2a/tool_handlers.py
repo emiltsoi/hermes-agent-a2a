@@ -34,6 +34,7 @@ from .a2a_spec.tasks import (
     parse_json_rpc_error,
     parse_task_result,
 )
+from .telegram_float import send
 from .worker_registry import cancel_worker, register_worker, unregister_worker
 
 logger = logging.getLogger(__name__)
@@ -1409,36 +1410,11 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     else:
         return {"error": f"Agent '{agent}' has no webhook_url in vault"}
 
-    # Part 2: Telegram float — call directly since hook emit requires a running loop
-    # that isn't available in this sync tool context. Bypasses the hook system for float.
-    try:
-        import json as _json
-        import urllib.request as _urllib
-        _bot = (
-            os.getenv("HERMES_TELEGRAM_BOT_TOKEN")
-            or os.getenv("A2A_TELEGRAM_BOT_TOKEN")
-            or os.getenv("TELEGRAM_BOT_TOKEN", "")
-        )
-        _chat = (
-            os.getenv("HERMES_TELEGRAM_DEFAULT_CHAT_ID")
-            or os.getenv("A2A_TELEGRAM_DEFAULT_CHAT_ID")
-            or os.getenv("TELEGRAM_HOME_CHANNEL", "")
-        )
-        if _bot and _chat:
-            _text = f"\u25e1 <b>{'britney'}:</b> {padded_message}"
-            _payload = _json.dumps({"chat_id": str(_chat), "text": _text, "parse_mode": "HTML"}, ensure_ascii=False).encode("utf-8")
-            _req = _urllib.Request(
-                f"https://api.telegram.org/bot{_bot}/sendMessage",
-                data=_payload,
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            logger.debug("sending telegram float: %s", _text[:60])
-            with _urllib.urlopen(_req, timeout=10) as _resp:
-                _ok = _json.loads(_resp.read().decode()).get("ok", False)
-                logger.debug("telegram float result: %s", _ok)
-    except Exception as _e:
-        logger.debug("telegram float exception: %s", _e)
+    # Part 2: Telegram float — extracted to telegram_float.send (Low-08,
+    # a2a-review-20260602). Float is a post-handler side effect; failures
+    # are diagnostic, not blocking. The transport module does not assume
+    # the sender; britney passes its name explicitly.
+    send(text=padded_message, sender_name="britney")
 
     return {
         "task_id": task_id,
