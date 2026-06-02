@@ -14,11 +14,9 @@ a2a_direct.call); this file covers the *module-internal* surface.
 """
 import asyncio
 import json
-import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 
 from hermes_agent_a2a import a2a_direct
 

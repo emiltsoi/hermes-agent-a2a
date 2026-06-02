@@ -19,7 +19,6 @@ import hmac
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 from urllib.error import HTTPError
 
 from hermes_agent_a2a import webhook_delivery
@@ -259,8 +258,17 @@ def test_trigger_async_uses_asyncio_to_thread_for_sleep(monkeypatch):
     def failing_urlopen(req, timeout=None):
         raise HTTPError(req.full_url, 500, "Internal Server Error", {}, None)
 
+    # Capture time.sleep calls routed through asyncio.to_thread. When the
+    # function passed to to_thread is time.sleep, capture the call; otherwise
+    # pass through to the real function.
+    def passthrough_to_thread(fn, *args):
+        if fn is webhook_delivery.time.sleep:
+            capture_sleep(*args)
+            return None
+        return fn(*args)
+
     with patch("urllib.request.urlopen", side_effect=failing_urlopen), \
-         patch("asyncio.to_thread", side_effect=lambda fn, *args: (sleep_calls.append(args[0]) if fn is webhook_delivery.time.sleep else fn(*args))[1] if False else (fn(*args) if fn is not webhook_delivery.time.sleep else capture_sleep(*args))) as mock_to_thread:
+         patch("asyncio.to_thread", side_effect=passthrough_to_thread):
         asyncio.run(webhook_delivery.trigger_async(message="hi", task_id="t-sleep", retries=2, base_delay=0.5))
 
     # 2 attempts → 1 sleep between them: 0.5.
