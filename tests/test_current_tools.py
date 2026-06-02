@@ -1387,13 +1387,13 @@ def test_call_a2a_direct_handles_http_errors():
 
 
 def test_trigger_webhook_uses_direct_a2a_when_flag_set():
-    """Plugin self-containment: _trigger_webhook() must use direct A2A when use_direct_a2a=True."""
-    from hermes_agent_a2a.server import _trigger_webhook
+    """Plugin self-containment: webhook_delivery.trigger() must use direct A2A when use_direct_a2a=True."""
+    from hermes_agent_a2a.webhook_delivery import trigger
     from unittest.mock import patch
 
     # Mock a2a_direct.call to verify it's called
-    with patch("hermes_agent_a2a.server.call", return_value={"result": "ok"}) as mock_direct:
-        _trigger_webhook(
+    with patch("hermes_agent_a2a.a2a_direct.call", return_value={"result": "ok"}) as mock_direct:
+        trigger(
             message="test message",
             task_id="task-123",
             use_direct_a2a=True,
@@ -1411,12 +1411,11 @@ def test_trigger_webhook_uses_direct_a2a_when_flag_set():
 
 
 def test_trigger_webhook_ssrf_guard_rejects_loopback_webhook_host():
-    """CR-1: _trigger_webhook must reject loopback A2A_WEBHOOK_HOST before delivery.
+    """CR-1: webhook_delivery.trigger must reject loopback A2A_WEBHOOK_HOST before delivery.
 
     An attacker who can set A2A_WEBHOOK_HOST=attacker.com could redirect the signed
     webhook payload to an external host. The SSRF guard blocks localhost/127.0.0.1.
     """
-    from hermes_agent_a2a.server import _trigger_webhook
     from hermes_agent_a2a.server import _validate_webhook_host
     from unittest.mock import patch
 
@@ -1458,7 +1457,7 @@ def test_trigger_webhook_ssrf_guard_prevents_urlopen_on_loopback_host(monkeypatc
     monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
 
     with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
-        srv_module._trigger_webhook(
+        srv_module.trigger(
             message="test", task_id="ssrf-task", on_failure=track_on_failure
         )
 
@@ -1500,7 +1499,7 @@ def test_trigger_webhook_async_ssrf_guard_prevents_urlopen_on_loopback_host(monk
     monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
 
     with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
-        asyncio.run(srv_module._trigger_webhook_async(
+        asyncio.run(srv_module.trigger_async(
             message="test", task_id="ssrf-async-task", on_failure=track_on_failure
         ))
 
@@ -1534,15 +1533,15 @@ def test_trigger_webhook_valid_host_allows_urlopen(monkeypatch):
     monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
 
     with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
-        srv_module._trigger_webhook(message="test", task_id="safe-task")
+        srv_module.trigger(message="test", task_id="safe-task")
 
     assert len(urlopen_called) == 1, f"Expected exactly 1 urlopen call, got: {urlopen_called}"
     assert "203.0.113.50" in urlopen_called[0]
 
 
 def test_trigger_webhook_fallback_to_webhook_when_direct_not_enabled():
-    """Plugin self-containment: _trigger_webhook() must use webhook when use_direct_a2a=False."""
-    from hermes_agent_a2a.server import _trigger_webhook
+    """Plugin self-containment: webhook_delivery.trigger() must use webhook when use_direct_a2a=False."""
+    from hermes_agent_a2a.webhook_delivery import trigger
     from unittest.mock import patch
 
     # Mock webhook secret to allow webhook path.
@@ -1558,7 +1557,7 @@ def test_trigger_webhook_fallback_to_webhook_when_direct_not_enabled():
             mock_response.__exit__ = lambda self, *args: None
             mock_urlopen.return_value = mock_response
 
-            _trigger_webhook(
+            trigger(
                 message="test message",
                 task_id="task-123",
                 use_direct_a2a=False  # Use webhook path
