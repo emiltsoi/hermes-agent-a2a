@@ -23,11 +23,11 @@ class TestListTasksRedaction:
         """An sk-... key in the response must be replaced with [REDACTED]."""
         task = _make_pending_task(
             task_id="redact-1",
-            response="Here is the key: sk-abcdefghijklmnopqrstuvwxyz1234",
+            response="Here is the key: sk-NOTAREALOPENAIKEYFAKEFIXTURE1234567890",
         )
         item = _build_task_list_item(task, state="completed")
         item_str = str(item)
-        assert "sk-abcdefghijklmnopqrstuvwxyz1234" not in item_str, (
+        assert "sk-NOTAREALOPENAIKEYFAKEFIXTURE1234567890" not in item_str, (
             f"OpenAI API key leaked in list-tasks response: {item}"
         )
         assert "[REDACTED]" in item_str, f"Redaction marker missing from item: {item}"
@@ -36,11 +36,11 @@ class TestListTasksRedaction:
         """A ghp_... token in the response must be replaced with [REDACTED]."""
         task = _make_pending_task(
             task_id="redact-2",
-            response="Token: ghp_abcdefghijklmnopqrstuvwxyz1234",
+            response="Token: ghp_NOTAREALGITHUBPATFAKEFIXTURE1234567890",
         )
         item = _build_task_list_item(task, state="completed")
         item_str = str(item)
-        assert "ghp_abcdefghijklmnopqrstuvwxyz1234" not in item_str, (
+        assert "ghp_NOTAREALGITHUBPATFAKEFIXTURE1234567890" not in item_str, (
             f"GitHub PAT leaked in list-tasks response: {item}"
         )
         assert "[REDACTED]" in item_str
@@ -49,11 +49,11 @@ class TestListTasksRedaction:
         """An xoxb-... token in the response must be replaced with [REDACTED]."""
         task = _make_pending_task(
             task_id="redact-3",
-            response="Slack: xoxb-1234567890-abcdefghijklmn",
+            response="Slack: xoxb-NOT-A-REAL-TOKEN-FAKE-FIXTURE-PURPOSEFULLY-OBVIOUS",
         )
         item = _build_task_list_item(task, state="completed")
         item_str = str(item)
-        assert "xoxb-1234567890-abcdefghijklmn" not in item_str, (
+        assert "xoxb-NOT-A-REAL-TOKEN-FAKE-FIXTURE-PURPOSEFULLY-OBVIOUS" not in item_str, (
             f"Slack bot token leaked in list-tasks response: {item}"
         )
         assert "[REDACTED]" in item_str
