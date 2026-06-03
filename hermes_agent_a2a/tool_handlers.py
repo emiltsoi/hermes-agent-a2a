@@ -1413,8 +1413,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     # Part 2: Telegram float — extracted to telegram_float.send (Low-08,
     # a2a-review-20260602). Float is a post-handler side effect; failures
     # are diagnostic, not blocking. The transport module does not assume
-    # the sender; britney passes its name explicitly.
-    send(text=padded_message, sender_name="britney")
+    # the sender; the handler passes the calling agent's own identity.
+    send(text=padded_message, sender_name=from_agent)
 
     return {
         "task_id": task_id,

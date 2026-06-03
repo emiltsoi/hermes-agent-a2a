@@ -866,7 +866,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # F-B007: POST /tasks/{id}:cancel  (CancelTask)
         if path.startswith("/tasks/") and ":cancel" in path:
             task_id = path.split("/tasks/")[1].split(":cancel")[0]
-            self._rest_cancel_task(task_id)
+            self._do_rest_post(lambda body: self._rest_cancel_task(task_id))
             return
 
         # F-B010: POST /tasks/{id}/pushNotificationConfigs  (CreateTaskPushNotificationConfig)
