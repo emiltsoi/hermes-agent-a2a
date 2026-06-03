@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.1] - 2026-06-03
+
+### Security — v3.3 Full Review Fixes (a2a-v3.3-full-20260603)
+
+- **ARCH-03: `sender_name` now uses caller identity** (`b9d0ea2`): `handle_send_session_message` hardcoded `sender_name="britney"` despite the `telegram_float` transport being sender-agnostic. Now reads `A2A_AGENT_NAME` via the existing `from_agent` variable. Any agent's Telegram float shows its own name.
+
+- **NEW-01: REST cancel endpoint now requires auth** (`b9d0ea2`): `POST /tasks/{id}:cancel` was the sole POST handler that bypassed `_do_rest_post()` — no `_check_auth()`, no `RateLimiter.allow()`. Now wrapped in `_do_rest_post` like `/message:send` and `/message:stream`. Unauthenticated task cancellation blocked.
+
+### Refactor — SSRF Guard Consolidation (a2a-v3.3-full-20260603)
+
+- **Four SSRF guard functions → two in `security.py`** (`a70e8a7`): `_validate_webhook_host` (server.py, loopback-only, 4 strings), `_validate_target_url` (tool_handlers.py, loopback-only, 4 strings), `_is_private_ip` (security.py, full CIDR), and `is_safe_url` (security.py, DNS-resolved) are now consolidated into `validate_host` and `validate_target_url` — both in `security.py`, sharing `_is_private_ip` for full private CIDR coverage (10.x, 172.16-31.x, 192.168.x, 169.254.x, IPv6 private/link-local).
+
+- **Webhook delivery path now blocks private networks** (SEC-01): `webhook_delivery.py` previously used `_validate_webhook_host` (4 loopback strings only). Now uses `validate_host` which blocks all private CIDRs via `_is_private_ip`. An attacker with `A2A_WEBHOOK_HOST` env-var control can no longer redirect signed webhook payloads to 10.0.0.1 or 192.168.1.1.
+
+- **All 11 call sites use one threat model** (ARCH-05, ARCH-06, NEW-03): `tool_handlers.py` uses a module-level import alias (`from .security import validate_target_url as _validate_target_url`) so all 10 existing call sites resolve to the new consolidated function without changes. `webhook_delivery.py` imports `validate_host as _validate_webhook_host` lazily (breaks the server.py circular dependency). `server.py:_validate_webhook_host` removed — last reason it lived in server.py is gone.
+
+### Tests
+
+- **CancelTask tests pass body for new auth gate** (`ef69933`): 3 REST cancel tests called `_rest_post()` without a body — `_do_rest_post` requires Content-Length 1-65536. Tests now pass `body={}`.
+
 ## [3.3.0] - 2026-06-02
 
 ### Architecture — Transport Module Extraction (LOW-08)
