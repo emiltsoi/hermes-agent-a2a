@@ -268,7 +268,7 @@ class TestCancelTask:
         task_id = "rest-cancel-task-1"
         _rpc_request(port, _make_task_send_body(task_id, "hello"))
 
-        body, status = _rest_post(port, f"/tasks/{task_id}:cancel")
+        body, status = _rest_post(port, f"/tasks/{task_id}:cancel", body={})
         assert status == 200, f"Expected 200 on cancel, got {status}: {body}"
 
     def test_cancel_task_returns_canceled_state(self, fresh_server):
@@ -278,7 +278,7 @@ class TestCancelTask:
         task_id = "rest-cancel-task-2"
         _rpc_request(port, _make_task_send_body(task_id, "hello"))
 
-        body, status = _rest_post(port, f"/tasks/{task_id}:cancel")
+        body, status = _rest_post(port, f"/tasks/{task_id}:cancel", body={})
         assert status == 200
         task = body.get("task", {})
         assert task.get("status", {}).get("state") == "canceled", \
@@ -288,7 +288,7 @@ class TestCancelTask:
         """POST /tasks/{id}:cancel must return 404 for unknown task."""
         server, port = fresh_server
 
-        body, status = _rest_post(port, "/tasks/nonexistent:cancel")
+        body, status = _rest_post(port, "/tasks/nonexistent:cancel", body={})
         assert status == 404, f"Expected 404 for unknown task, got {status}: {body}"
 
 
