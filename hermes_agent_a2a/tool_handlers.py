@@ -36,6 +36,7 @@ from .a2a_spec.tasks import (
 )
 from .telegram_float import send
 from .worker_registry import cancel_worker, register_worker, unregister_worker
+from .security import validate_target_url as _validate_target_url
 
 logger = logging.getLogger(__name__)
 
@@ -333,16 +334,8 @@ def _normalize_url(url: str) -> str:
     return (url or "").strip().rstrip("/")
 
 
-def _validate_target_url(url: str, allow_loopback: bool = False) -> str:
-    """Validate and SSRF-protect a target URL."""
-    url = _normalize_url(url)
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("A2A URL must be an http(s) URL")
-    netloc = parsed.netloc.split(":")[0]
-    if not allow_loopback and netloc in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-        raise ValueError("A2A URL cannot point to loopback addresses")
-    return url
+# _validate_target_url is now an alias for security.validate_target_url.
+# Imported at module level above; old inline definition removed (SSRF consolidation).
 
 
 def _rate_limited(func):

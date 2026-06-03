@@ -47,24 +47,6 @@ from .a2a_direct import call, call_async
 from .webhook_delivery import trigger, trigger_async
 
 
-def _validate_webhook_host(host: str) -> str:
-    """Validate A2A_WEBHOOK_HOST to prevent SSRF in webhook delivery.
-
-    Rejects loopback/private addresses to block abuse via environment variable
-    injection. The webhook_url is built from these values and sent with an HMAC
-    signature, so redirecting it to an attacker-controlled host would leak the
-    signed payload.
-    """
-    # urlparse requires a scheme; prefix to extract the host component safely.
-    parsed = urlparse(f"http://{host}")
-    netloc = parsed.netloc.split(":")[0]
-    if netloc in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-        raise ValueError(
-            f"A2A_WEBHOOK_HOST ({host}) resolves to a loopback address; "
-            "refusing to deliver signed webhook to an internal endpoint from this path"
-        )
-    return host
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
@@ -2105,7 +2087,8 @@ class A2AServer(ThreadingHTTPServer):
         # If A2A_WEBHOOK_HOST is set and passes SSRF validation, use object form
         if webhook_host:
             try:
-                _validate_webhook_host(webhook_host)
+                from .security import validate_host
+                validate_host(webhook_host)
                 webhook_url = f"http://{webhook_host}:{webhook_port}/webhooks/a2a_trigger"
                 return {"webhookUrl": webhook_url}
             except ValueError:

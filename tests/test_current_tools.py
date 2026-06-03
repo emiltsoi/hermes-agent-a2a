@@ -1416,7 +1416,7 @@ def test_trigger_webhook_ssrf_guard_rejects_loopback_webhook_host():
     An attacker who can set A2A_WEBHOOK_HOST=attacker.com could redirect the signed
     webhook payload to an external host. The SSRF guard blocks localhost/127.0.0.1.
     """
-    from hermes_agent_a2a.server import _validate_webhook_host
+    from hermes_agent_a2a.security import validate_host as _validate_webhook_host
     from unittest.mock import patch
 
     # _validate_webhook_host must reject loopback hosts directly.

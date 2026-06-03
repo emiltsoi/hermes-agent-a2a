@@ -27,7 +27,7 @@ No behaviour change vs the previous ``_trigger_webhook`` /
 leading underscores are dropped because the module name is the
 transport, and the public function name is the action.
 
-The SSRF guard (``_validate_webhook_host``) stays in ``server.py``
+The SSRF guard (``validate_host``, aliased as ``_validate_webhook_host``) is imported from ``security.py``
 because it's also used by ``_push_notifications_capability`` (a class
 method on the A2ARequestHandler). Importing it lazily here breaks the
 circular dependency.
@@ -65,11 +65,9 @@ def trigger(message: str = "", task_id: str = "", mode: str = None, deliver_only
         on_failure: optional callable invoked with (task_id,) if all retries fail.
     """
     # Lazy import to break the circular dependency with server.py —
-    # _validate_webhook_host lives in server.py because it's also used
-    # by _push_notifications_capability (a class method on the request
-    # handler), and importing server.py at module-load time would
-    # create a cycle.
-    from .server import _validate_webhook_host
+    # validate_host lives in security.py — imported as _validate_webhook_host
+    # for call-site compatibility. Lazy import here to break the module cycle.
+    from .security import validate_host as _validate_webhook_host
 
     # Use direct A2A for modes 1,2,3 (protocol tasks, workers)
     if use_direct_a2a and target_url:
@@ -150,7 +148,7 @@ async def trigger_async(message: str = "", task_id: str = "", mode: str = None, 
     blocking the event loop with urllib.request.urlopen calls.
     """
     # Lazy import to break the circular dependency with server.py.
-    from .server import _validate_webhook_host
+    from .security import validate_host as _validate_webhook_host
 
     if use_direct_a2a and target_url:
         from .a2a_direct import call_async

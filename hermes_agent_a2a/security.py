@@ -241,6 +241,83 @@ def is_safe_url(url: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# SSRF protection — URL and host validation (consolidated)
+# ---------------------------------------------------------------------------
+
+
+def validate_host(host: str) -> str:
+    """Validate a host string for SSRF safety.
+
+    Rejects loopback addresses and private network IPs (10.x, 172.16-31.x,
+    192.168.x, 169.254.x, IPv6 loopback/private/link-local). Delegates to
+    :func:`_is_private_ip` for full CIDR coverage.
+
+    Returns the host unchanged if safe; raises ``ValueError`` if unsafe.
+
+    Args:
+        host: A hostname or IP address string.
+
+    Raises:
+        ValueError: If the host resolves to a loopback or private address.
+    """
+    # urlparse requires a scheme; prefix to extract the host component.
+    parsed = urlparse(f"http://{host}")
+    netloc = parsed.netloc.split(":")[0]
+    if netloc in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise ValueError(
+            f"Host ({host}) resolves to a loopback address; "
+            "refusing to deliver to an internal endpoint"
+        )
+    if _is_private_ip(netloc):
+        raise ValueError(
+            f"Host ({host}) resolves to a private network address "
+            f"({netloc}); refusing SSRF delivery"
+        )
+    return host
+
+
+def validate_target_url(url: str, allow_loopback: bool = False) -> str:
+    """Validate and SSRF-protect a target URL.
+
+    Blocks non-HTTP(S) schemes, loopback addresses (when
+    ``allow_loopback=False``), and private network IPs via
+    :func:`_is_private_ip`. Unlike :func:`is_safe_url`, this does NOT
+    perform DNS resolution — it validates the URL text and the IP
+    it literally contains. DNS rebinding protection belongs at the
+    transport layer, not at URL-validation time.
+
+    Args:
+        url: The target URL to validate.
+        allow_loopback: If True, allow loopback addresses (fleet-internal).
+
+    Returns:
+        The URL string unchanged if safe.
+
+    Raises:
+        ValueError: If the URL is unsafe (SSRF risk).
+    """
+    url = (url or "").strip().rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("A2A URL must be an http(s) URL")
+
+    host = parsed.netloc.split(":")[0]
+    if host in ("0.0.0.0",):
+        raise ValueError("A2A URL cannot be the unspecified address")
+
+    if not allow_loopback:
+        if host in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError("A2A URL cannot point to loopback addresses")
+        # Reject private network IPs
+        if _is_private_ip(host):
+            raise ValueError(
+                f"URL resolves to private network ({host}); "
+                "refusing SSRF delivery"
+            )
+    return url
+
+
 def validate_webhook_endpoint(endpoint: str) -> tuple[bool, str]:
     """Validate a webhook endpoint for push notification delivery.
 
