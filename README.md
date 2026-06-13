@@ -1,21 +1,17 @@
 # Hermes Agent A2A
 
-> **⚠️ DEPRECATED — June 2026**
+> **Status: Active — pending upstream migration**
 >
-> This plugin has been split into two focused projects:
+> This plugin is the current A2A implementation for the Hermes fleet (7 agents, daily use). It provides standard A2A (discover, call, serve, JSON-RPC, SSE, push notifications) plus fleet session relay (`a2a_send_session_message`).
 >
-> | Replacement | For | Link |
-> |---|---|---|
-> | **Hermes A2A platform adapter** | Standard A2A — discover, call, serve, JSON-RPC, Agent Cards, security | Built into upstream Hermes Agent (PR #41711) |
-> | **hermes-mesh** | Fleet session relay — `a2a_send_session_message`, fleet identity, gateway float | https://github.com/emiltsoi/hermes-mesh |
+> **Planned migration** once [upstream PR #41711](https://github.com/NousResearch/hermes-agent/pull/41711) merges:
 >
-> **What happened:** The upstream Hermes project shipped a native A2A platform adapter (stdlib-only, 1,788 lines) that covers all standard A2A operations. We extracted our unique mesh layer into `hermes-mesh` (~500 lines, depends on the upstream adapter). This repo is archived — preserved for history, no longer maintained.
+> | What | Moves to |
+> |------|----------|
+> | Standard A2A (discover, call, serve) | Upstream Hermes A2A platform adapter |
+> | Fleet session relay (mesh) | [hermes-mesh](https://github.com/emiltsoi/hermes-mesh) |
 >
-> **Migration:** `pip install hermes-mesh` for mesh relay. Enable the upstream A2A platform for standard A2A. Both work side by side.
->
-> ---
->
-> _Archived. The code below is historical. See the two linked projects for current usage._
+> Until the upstream adapter ships, this plugin remains the canonical A2A path for Hermes. It is actively deployed and maintained. No migration required yet.
 
 
 `hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, session relay via webhook delivery, and fleet metrics — all Hermes-specific, not fleet-agnostic.
