@@ -212,7 +212,7 @@ _call_timestamps: deque[float] = deque()
 _rate_lock = threading.Lock()
 
 
-def handle_help(topic: str = "overview") -> dict:
+def handle_help(topic: str = "overview", **kwargs) -> dict:
     topic = (topic or "overview").strip().lower()
     tools = {
         "a2a_help": "Show this guide.",
@@ -555,6 +555,7 @@ def handle_discover(
     register_overwrite: bool = False,
     task_id: Optional[str] = None,
     user_task: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     """Fetch a remote agent's Agent Card by name or direct URL.
 
@@ -644,7 +645,7 @@ def handle_discover(
 # ----------------------------------------------------------------------
 
 
-def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None) -> dict:
+def handle_list(task_id: Optional[str] = None, user_task: Optional[str] = None, **kwargs) -> dict:
     """Return all agents registered in the vault registry.
 
     Uses VaultResolver.list_agents() to enumerate $HERMES_HOME/profiles/*/a2a/vault.yaml.
@@ -673,6 +674,7 @@ def handle_announce(
     auth_value: Optional[str] = None,
     task_id: Optional[str] = None,
     user_task: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     """Announce this agent to a shared A2A registry.
 
@@ -1011,6 +1013,7 @@ def handle_send_protocol_task(
     poll_interval: int = _POLL_INTERVAL,
     poll_attempts: int = _POLL_MAX_ATTEMPTS,
     user_task: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     """Send a task/message to a remote A2A agent.
 
@@ -1142,6 +1145,7 @@ def handle_run_local_agent_task(
     task_id: Optional[str] = None,
     timeout: int = 300,
     user_task: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     return _handle_call_mode2(name=name or "", message=message, task_id=task_id, timeout=int(timeout or 300))
 
@@ -1154,6 +1158,7 @@ def handle_run_remote_agent_task(
     task_id: Optional[str] = None,
     timeout: int = 300,
     user_task: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     return _handle_call_mode3(name=name or "", message=message, task_id=task_id, timeout=int(timeout or 300))
 
@@ -1169,6 +1174,7 @@ def handle_cancel_protocol_task(
     task_id: str = "",
     timeout: int = _DEFAULT_TIMEOUT,
     user_task: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     if not task_id:
         return {"error": "'task_id' is required"}
