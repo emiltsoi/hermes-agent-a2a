@@ -40,6 +40,7 @@ def _resolve_credentials() -> tuple[str, str]:
     bot = (
         os.getenv("HERMES_TELEGRAM_BOT_TOKEN")
         or os.getenv("A2A_TELEGRAM_BOT_TOKEN")
+        or os.getenv("A2A_V2_BOT_TOKEN")
         or os.getenv("TELEGRAM_BOT_TOKEN", "")
     )
     chat = (

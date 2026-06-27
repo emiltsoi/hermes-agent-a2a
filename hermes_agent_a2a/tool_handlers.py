@@ -171,6 +171,8 @@ def _validate_agent_webhook_config(agent_info: dict) -> tuple[bool, str]:
 def _validate_webhook_reachable(webhook_url: str, timeout: int = 5) -> tuple[bool, str]:
     """Validate that a webhook URL is reachable via HEAD request.
     
+    SSRF-protected via validate_target_url before any outbound I/O.
+    
     Args:
         webhook_url: The webhook URL to check.
         timeout: Timeout in seconds for the reachability check.
@@ -178,6 +180,10 @@ def _validate_webhook_reachable(webhook_url: str, timeout: int = 5) -> tuple[boo
     Returns:
         Tuple of (is_reachable, error_message).
     """
+    try:
+        _validate_target_url(webhook_url, allow_loopback=True)
+    except ValueError as e:
+        return False, f"Webhook URL rejected: {e}"
     try:
         import urllib.request
         req = urllib.request.Request(webhook_url, method="HEAD")

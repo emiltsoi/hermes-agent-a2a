@@ -14,3 +14,16 @@ a2a:
 a2a_server:
   host: 127.0.0.1
   port: 8081
+
+# ------------------------------------------------------------------
+# Rate limiting for A2A task endpoints (token bucket).
+# Disabled by default — set enabled: true to activate.
+# ------------------------------------------------------------------
+rate_limit:
+  enabled: false
+  requests_per_window: 100
+  window_seconds: 60
+  burst_multiplier: 2.0
+  header_name: "X-Forwarded-For"
+  cleanup_interval_seconds: 300
+  max_entries: 10000

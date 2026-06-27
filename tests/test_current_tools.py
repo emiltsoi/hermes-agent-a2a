@@ -1346,13 +1346,14 @@ def test_call_a2a_direct_builds_correct_json_rpc_payload():
     mock_response.__enter__ = lambda self: self
     mock_response.__exit__ = lambda self, *args: None
 
-    with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
-        result = call(
-            url="http://127.0.0.1:41808/a2a",
-            message="hello",
-            task_id="task-123",
-            auth_token="secret"
-        )
+    with patch("hermes_agent_a2a.a2a_direct._validate_target_url"):
+        with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
+            result = call(
+                url="http://127.0.0.1:41808/a2a",
+                message="hello",
+                task_id="task-123",
+                auth_token="secret"
+            )
 
         # Verify the call was made
         assert mock_urlopen.called
@@ -1375,12 +1376,13 @@ def test_call_a2a_direct_handles_http_errors():
     from unittest.mock import patch
     from urllib.error import HTTPError
 
-    with patch("urllib.request.urlopen", side_effect=HTTPError(None, 404, "Not Found", None, None)):
-        result = call(
-            url="http://127.0.0.1:41808/a2a",
-            message="hello",
-            task_id="task-123"
-        )
+    with patch("hermes_agent_a2a.a2a_direct._validate_target_url"):
+        with patch("urllib.request.urlopen", side_effect=HTTPError(None, 404, "Not Found", None, None)):
+            result = call(
+                url="http://127.0.0.1:41808/a2a",
+                message="hello",
+                task_id="task-123"
+            )
 
         assert "error" in result
         assert "404" in result["error"]

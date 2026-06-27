@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import hashlib
 import hmac
 import json
 import logging
@@ -21,11 +20,9 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from threading import Event, Lock
 from collections import OrderedDict
 from typing import Optional
-from urllib.parse import urlparse
-import urllib.request
-import urllib.error
 
-from .security import RateLimiter, audit, filter_outbound, sanitize_inbound
+from .security import audit, filter_outbound, sanitize_inbound
+from .rate_limiter import RateLimiter, RateLimitConfig
 from .a2a_spec.tasks import build_error_response
 from .a2a_spec.push import (
     CreateTaskPushNotificationConfigRequest,
@@ -43,7 +40,7 @@ from .push_delivery import (
     list_push_configs,
     delete_push_config,
 )
-from .a2a_direct import call, call_async
+from .a2a_direct import call_async
 from .webhook_delivery import trigger, trigger_async
 
 
@@ -575,6 +572,47 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logger.debug("A2A HTTP: %s", format % args)
 
+    def _rate_limit_client_id(self) -> str:
+        """Extract caller identity for rate limiting.
+
+        Uses the configured header (default X-Forwarded-For); falls back
+        to the connection peer address.
+        """
+        header_name = self.server.limiter.config.header_name
+        forwarded = self.headers.get(header_name, "")
+        if forwarded:
+            # X-Forwarded-For may contain a comma-separated chain; use first IP
+            return forwarded.split(",")[0].strip()
+        return self.client_address[0]
+
+    def _send_json_rate_limited(self, retry_after: int) -> None:
+        """Send a 429 Too Many Requests response with Retry-After header."""
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32603,
+                    "message": "Rate limit exceeded",
+                    "data": {"retryAfter": retry_after},
+                },
+                "id": None,
+            },
+            ensure_ascii=False,
+        ).encode()
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Retry-After", str(retry_after))
+        self.send_header("A2A-Version", A2A_VERSION)
+        extensions = _get_a2a_extensions()
+        if extensions:
+            self.send_header("A2A-Extensions", extensions)
+        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _check_hmac_push(self, required: bool = True) -> bool:
         """Check X-HMAC-Key for push REST endpoints.
 
@@ -763,6 +801,14 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?")[0]
+
+        if path.startswith(("/tasks", "/extendedAgentCard")):
+            if self.server.require_auth and not self._check_auth():
+                self._send_json(
+                    {"jsonrpc": "2.0", "error": {"code": -32603, "message": "Unauthorized"}},
+                    401,
+                )
+                return
 
         # F-B008: GET /tasks/{id}:subscribe  (SubscribeToTask — SSE) — must check before /tasks/{id}
         if path.startswith("/tasks/") and ":subscribe" in path:
@@ -1239,11 +1285,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if not self.server.limiter.allow(self.client_address[0]):
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32603, "message": "Rate limit exceeded"}},
-                429,
-            )
+        allowed, retry_after = self.server.limiter.allow(self._rate_limit_client_id())
+        if not allowed:
+            self._send_json_rate_limited(retry_after)
             return
 
         try:
@@ -1297,16 +1341,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if not self.server.limiter.allow(self.client_address[0]):
-            audit.log("rate_limited", {"client": self.client_address[0]})
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32603, "message": "Rate limit exceeded", "data": None},
-                    "id": None,
-                },
-                429,
-            )
+        allowed, retry_after = self.server.limiter.allow(self._rate_limit_client_id())
+        if not allowed:
+            audit.log("rate_limited", {"client": self._rate_limit_client_id()})
+            self._send_json_rate_limited(retry_after)
             return
 
         try:
@@ -2048,6 +2086,30 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self._send_json(card)
 
 
+def _load_rate_limit_config_from_env() -> RateLimitConfig:
+    """Build RateLimitConfig from environment variables (fallback when no config.yaml).
+
+    Uses the same defaults as RateLimitConfig; env vars override them.
+    """
+    enabled = os.getenv("A2A_RATE_LIMIT_ENABLED", "").lower() in ("1", "true", "yes")
+    requests_per_window = int(os.getenv("A2A_RATE_LIMIT_REQUESTS", "100"))
+    window_seconds = int(os.getenv("A2A_RATE_LIMIT_WINDOW", "60"))
+    burst_multiplier = float(os.getenv("A2A_RATE_LIMIT_BURST", "2.0"))
+    header_name = os.getenv("A2A_RATE_LIMIT_HEADER", "X-Forwarded-For")
+    cleanup_interval = int(os.getenv("A2A_RATE_LIMIT_CLEANUP", "300"))
+    max_entries = int(os.getenv("A2A_RATE_LIMIT_MAX_ENTRIES", "10000"))
+
+    return RateLimitConfig(
+        enabled=enabled,
+        requests_per_window=requests_per_window,
+        window_seconds=window_seconds,
+        burst_multiplier=burst_multiplier,
+        header_name=header_name,
+        cleanup_interval_seconds=cleanup_interval,
+        max_entries=max_entries,
+    )
+
+
 class A2AServer(ThreadingHTTPServer):
     """Threaded HTTP server with A2A configuration.
 
@@ -2057,7 +2119,8 @@ class A2AServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, host: str, port: int, hmac_key: Optional[str] = None):
+    def __init__(self, host: str, port: int, hmac_key: Optional[str] = None,
+                 rate_limit_config: Optional[RateLimitConfig] = None):
         self.agent_name = os.getenv("A2A_AGENT_NAME", "hermes-agent")
         self.agent_description = os.getenv("A2A_AGENT_DESCRIPTION", "A self-improving AI agent powered by Hermes")
         self.auth_token = os.getenv("A2A_AUTH_TOKEN", "")
@@ -2070,7 +2133,12 @@ class A2AServer(ThreadingHTTPServer):
                 "[A2A] No A2A_AUTH_TOKEN set — only localhost requests will be accepted, "
                 "and localhost is not safe in containers. Set A2A_REQUIRE_AUTH=true to reject all unauthenticated requests."
             )
-        self.limiter = RateLimiter()
+        # Build RateLimitConfig from config.yaml (L6→L10 bridge);
+        # fall back to env-driven defaults if no dataclass supplied.
+        if rate_limit_config is None:
+            rate_limit_config = _load_rate_limit_config_from_env()
+        self.limiter = RateLimiter(rate_limit_config)
+        self.limiter.start_cleanup()
         _start_orphaned_task_watchdog(_ensure_task_queue())
         super().__init__((host, port), A2ARequestHandler)
 

@@ -22,6 +22,35 @@ __version__ = _get_version()
 _server_process = None
 
 
+def _load_rate_limit_config() -> "RateLimitConfig":
+    """Load rate_limit section from config.yaml and build RateLimitConfig dataclass.
+
+    Falls back to defaults (disabled) when config.yaml is unavailable
+    or the section is missing.
+    """
+    from .rate_limiter import RateLimitConfig
+
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        rl_section = cfg.get("rate_limit", {}) if isinstance(cfg, dict) else {}
+    except Exception:
+        rl_section = {}
+
+    if not rl_section:
+        return RateLimitConfig()  # all defaults, disabled
+
+    return RateLimitConfig(
+        enabled=bool(rl_section.get("enabled", False)),
+        requests_per_window=int(rl_section.get("requests_per_window", 100)),
+        window_seconds=int(rl_section.get("window_seconds", 60)),
+        burst_multiplier=float(rl_section.get("burst_multiplier", 2.0)),
+        header_name=str(rl_section.get("header_name", "X-Forwarded-For")),
+        cleanup_interval_seconds=int(rl_section.get("cleanup_interval_seconds", 300)),
+        max_entries=int(rl_section.get("max_entries", 10000)),
+    )
+
+
 def _start_a2a_server() -> None:
     """Start A2A HTTP server as a daemon thread inside the gateway process.
 
@@ -43,6 +72,8 @@ def _start_a2a_server() -> None:
 
     from .server import A2AServer, set_runtime_server
 
+    rate_limit_config = _load_rate_limit_config()
+
     port = int(os.getenv("A2A_PORT", "8081"))
     host = os.getenv("A2A_HOST", "127.0.0.1")
     max_port_retries = int(os.getenv("A2A_PORT_RETRY_MAX", "10"))
@@ -50,7 +81,7 @@ def _start_a2a_server() -> None:
     server = None
     for attempt in range(max_port_retries):
         try:
-            server = A2AServer(host, port)
+            server = A2AServer(host, port, rate_limit_config=rate_limit_config)
             break
         except OSError as e:
             if "Address already in use" in str(e) and attempt < max_port_retries - 1:
@@ -119,7 +150,7 @@ class HermesAgentA2APlugin:
         _start_metrics_logger()
 
     def on_shutdown(self) -> None:
-        """Stop the A2A server thread and SSE streamer."""
+        """Stop the A2A server thread, rate limiter cleanup, and SSE streamer."""
         logger.info("[HermesA2A] shutdown — stopping A2A server thread and SSE streamer")
         from .runtime_state import get_runtime_state
         from .server import clear_runtime_server
@@ -129,6 +160,7 @@ class HermesAgentA2APlugin:
             server = state.get_server()
             if server:
                 clear_runtime_server(server)
+                server.limiter.stop_cleanup()
                 server.shutdown()
         except Exception as exc:
             logger.debug("Error shutting down A2A server: %s", exc)

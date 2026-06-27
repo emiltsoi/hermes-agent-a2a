@@ -1,4 +1,4 @@
-"""A2A security utilities — prompt injection filtering, redaction, rate limiting, audit, SSRF protection, JWS signing."""
+"""A2A security utilities — prompt injection filtering, redaction, audit, SSRF protection, JWS signing."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import logging
 import re
 import socket
 import time
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -119,23 +118,6 @@ def filter_outbound(text: str) -> str:
         text = pattern.sub("[REDACTED]", text)
     return text.strip()
 
-
-class RateLimiter:
-    def __init__(self, max_requests: int = 20, window_seconds: int = 60):
-        self.max_requests = max_requests
-        self.window = window_seconds
-        self._buckets: Dict[str, list] = defaultdict(list)
-        self._lock = Lock()
-
-    def allow(self, client_id: str) -> bool:
-        now = time.time()
-        with self._lock:
-            bucket = self._buckets[client_id]
-            self._buckets[client_id] = [ts for ts in bucket if ts > now - self.window]
-            if len(self._buckets[client_id]) >= self.max_requests:
-                return False
-            self._buckets[client_id].append(now)
-            return True
 
 
 _AUDIT_MAX_SIZE = 10 * 1024 * 1024  # 10 MB

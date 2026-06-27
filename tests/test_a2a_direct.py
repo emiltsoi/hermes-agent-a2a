@@ -41,7 +41,7 @@ def test_call_uses_A2A_AGENT_NAME_env_override(monkeypatch):
         return mock_response
 
     with patch("urllib.request.urlopen", side_effect=capture_urlopen):
-        a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="task-123")
+        a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="task-123", _allow_loopback=True)
 
     # The spec format puts sender_name under params.message.metadata.sender_name
     assert captured["body"]["params"]["message"]["metadata"]["sender_name"] == "custom-agent"
@@ -63,7 +63,7 @@ def test_call_falls_back_to_hermes_agent_default_when_env_unset(monkeypatch):
         return mock_response
 
     with patch("urllib.request.urlopen", side_effect=capture_urlopen):
-        a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="t")
+        a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="t", _allow_loopback=True)
 
     assert captured["body"]["params"]["message"]["metadata"]["sender_name"] == "hermes-agent"
 
@@ -80,7 +80,7 @@ def test_call_returns_invalid_response_when_neither_result_nor_error():
     mock_response.__exit__ = lambda self, *args: None
 
     with patch("urllib.request.urlopen", return_value=mock_response):
-        result = a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="task-x")
+        result = a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="task-x", _allow_loopback=True)
 
     assert result == {"error": "Invalid response", "task_id": "task-x"}
 
@@ -92,7 +92,7 @@ def test_call_returns_invalid_response_when_neither_result_nor_error():
 def test_call_swallows_generic_exception_into_error_dict():
     """A non-HTTP, non-URL exception (e.g. TimeoutError) returns an error dict."""
     with patch("urllib.request.urlopen", side_effect=TimeoutError("connect timeout")):
-        result = a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="task-y")
+        result = a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hi", task_id="task-y", _allow_loopback=True)
 
     # The error string is whatever str(e) returns for TimeoutError; just check
     # the shape (error key + task_id) and that the message contains the cause.
@@ -146,7 +146,7 @@ def test_call_payload_uses_spec_format_with_role_parts_metadata():
         return mock_response
 
     with patch("urllib.request.urlopen", side_effect=capture_urlopen):
-        a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hello", task_id="t")
+        a2a_direct.call(url="http://127.0.0.1:41808/a2a", message="hello", task_id="t", _allow_loopback=True)
 
     # The non-spec format is params.task.text; the spec format is
     # params.message.role + params.message.parts + params.message.metadata.

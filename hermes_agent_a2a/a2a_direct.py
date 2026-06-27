@@ -26,8 +26,10 @@ import os
 import urllib.error
 import urllib.request
 
+from .security import validate_target_url as _validate_target_url
 
-def call(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10) -> dict:
+
+def call(url: str, message: str, task_id: str, auth_token: str = "", timeout: int = 10, _allow_loopback: bool = False) -> dict:
     """Make a direct A2A JSON-RPC call to an agent.
 
     NOTE: Must use A2A spec format (params.message.role/parts/metadata) via build_task_send_payload.
@@ -57,6 +59,8 @@ def call(url: str, message: str, task_id: str, auth_token: str = "", timeout: in
         intent="consultation",
         expected_action="reply",
     )
+    _validate_target_url(url, allow_loopback=_allow_loopback)
+
     body = json.dumps(payload, ensure_ascii=False).encode()
     headers = {"Content-Type": "application/json"}
     if auth_token:
