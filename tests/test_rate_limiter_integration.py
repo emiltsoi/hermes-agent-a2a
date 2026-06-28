@@ -40,7 +40,7 @@ def a2a_server():
     server = A2AServer(host, port, rate_limit_config=cfg)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    time.sleep(0.1)
+    assert _wait_for_server(host, port), "server failed to start within timeout"
     yield host, port, server
     server.limiter.stop_cleanup()
     server.shutdown()
@@ -77,6 +77,21 @@ def _get(host, port, path):
         body_bytes = e.read()
         return e.code, json.loads(body_bytes) if body_bytes else {}
 
+
+def _wait_for_server(host, port, timeout=3.0):
+    """Poll the server until it accepts connections or timeout expires."""
+    import socket
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            sock.connect((host, port))
+            sock.close()
+            return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.05)
+    return False
 
 def _send_message_body(text="Hello"):
     return {
@@ -239,7 +254,7 @@ class TestConcurrentAccess:
         server = A2AServer(host, port, rate_limit_config=cfg)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        time.sleep(0.1)
+        assert _wait_for_server(host, port), "server failed to start within timeout"
         try:
             def _req(i):
                 url = f"http://{host}:{port}/"
@@ -275,7 +290,7 @@ class TestDisabledBackwardCompatible:
         server = A2AServer(host, port, rate_limit_config=cfg)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        time.sleep(0.1)
+        assert _wait_for_server(host, port), "server failed to start within timeout"
         try:
             for i in range(50):
                 status, body, _ = _post(host, port, "/", _send_message_body(f"msg-{i}"))

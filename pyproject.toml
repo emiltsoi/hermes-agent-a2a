@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hermes-agent-a2a"
-version = "3.3.3"
+version = "3.3.4"
 description = "⚠️ DEPRECATED — Archived June 2026. Standard A2A now natively supported by upstream Hermes A2A platform adapter. Fleet session relay extracted to hermes-mesh (pip install hermes-mesh). This package is preserved for history only — no further releases."
 readme = "README.md"
 requires-python = ">=3.11"
