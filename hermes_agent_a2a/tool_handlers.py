@@ -229,6 +229,22 @@ def _resolve_rpc_target(name: str) -> tuple[dict | None, str, dict, bool, dict |
     return agent_info, target_url, resolved_auth, allow_loopback, None
 
 
+def _resolve_outbound_target(name: Optional[str], url: Optional[str], direct_auth: dict):
+    """Resolve an outbound RPC target by fleet ``name`` or explicit ``url``.
+
+    Returns ``(target_url, resolved_auth, allow_loopback, agent_info, error)``.
+    For a fleet ``name`` this delegates to ``_resolve_rpc_target`` (so ``error``
+    is set when the agent is unknown or has no a2a_url, and ``agent_info`` is None
+    only when the agent is unknown). For an explicit ``url`` the caller-supplied
+    ``direct_auth`` is used and loopback is disallowed. SSRF validation of the
+    URL is left to the caller, which formats its own error payload.
+    """
+    if name:
+        agent_info, target_url, resolved_auth, allow_loopback, err = _resolve_rpc_target(name)
+        return target_url, resolved_auth, allow_loopback, agent_info, err
+    return url or "", direct_auth, False, None, None
+
+
 def _run_worker_subprocess(task_id: str, agent_home: str, hermes_home: str,
                            message: str, timeout: int):
     """Spawn the ephemeral worker subprocess shared by Mode 2 and Mode 3.
@@ -615,6 +631,32 @@ def _http_request(method: str, url: str, json_body: dict = None, headers: dict =
         raise ConnectionError(f"Cannot connect: {e.reason}") from e
 
 
+def _rpc_call(target_url: str, payload: dict, auth: Optional[dict], timeout: int) -> tuple[dict, str]:
+    """POST a JSON-RPC payload to a remote A2A agent and parse the envelope.
+
+    Returns ``(rpc_result, error_msg)``: on success ``error_msg`` is "" and
+    ``rpc_result`` is the JSON-RPC ``result`` object (possibly empty); on any
+    transport or protocol failure ``rpc_result`` is {} and ``error_msg`` is a
+    human-readable description. Consolidates the request + error-parse triad that
+    was duplicated across the send/cancel/mode-3 outbound paths.
+    """
+    try:
+        result = _http_request(
+            "POST", target_url.rstrip("/"), json_body=payload,
+            headers=_auth_headers(auth), timeout=timeout, a2a_version="1.0",
+        )
+    except ConnectionError:
+        return {}, f"Cannot connect to {target_url}"
+    except TimeoutError:
+        return {}, f"Remote agent timed out after {timeout}s"
+    except Exception as exc:
+        return {}, f"Call failed: {exc}"
+    err_msg = parse_json_rpc_error(result)
+    if err_msg:
+        return {}, f"Remote agent error: {err_msg}"
+    return result.get("result", {}) or {}, ""
+
+
 # ----------------------------------------------------------------------
 # Tool: discover
 # ----------------------------------------------------------------------
@@ -973,18 +1015,11 @@ def _handle_call_mode3(
     )
     payload["params"]["message"]["metadata"]["worker_at"] = "target"
 
-    headers = _auth_headers(resolved_auth)
+    rpc_result, error_msg = _rpc_call(target_url, payload, resolved_auth, timeout)
+    if error_msg:
+        return {"error": error_msg}
 
-    try:
-        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout, a2a_version="1.0")
-    except Exception as exc:
-        return {"error": f"Mode 3 HTTP error: {exc}"}
-
-    err_msg = parse_json_rpc_error(result)
-    if err_msg:
-        return {"error": f"Mode 3 remote agent error: {err_msg}"}
-
-    parsed = parse_task_result(result.get("result", {}) or {}, default_task_id=task_id)
+    parsed = parse_task_result(rpc_result, default_task_id=task_id)
     if parsed["response"]:
         return {
             "task_id": parsed["task_id"],
@@ -1032,22 +1067,16 @@ def handle_send_protocol_task(
     if not url and not name:
         return {"error": "Provide either 'url' or 'name'"}
 
-    target_url = ""
-    resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
-
-    if name:
-        agent_info, target_url, resolved_auth, allow_loopback, err = _resolve_rpc_target(name)
-        if agent_info is None:
-            return err  # agent not found
-        if skill:
-            valid_skill, available_skills = validate_skill(agent_info, skill)
-            if not valid_skill:
-                return {"error": f"Skill '{skill}' not found for agent '{name}'", "available_skills": available_skills}
-        if err:
-            return err  # agent has no a2a_url
-    else:
-        target_url = url
-        allow_loopback = False
+    direct_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
+    target_url, resolved_auth, allow_loopback, agent_info, err = _resolve_outbound_target(name, url, direct_auth)
+    if name and agent_info is None:
+        return err  # agent not found
+    if name and skill:
+        valid_skill, available_skills = validate_skill(agent_info, skill)
+        if not valid_skill:
+            return {"error": f"Skill '{skill}' not found for agent '{name}'", "available_skills": available_skills}
+    if err:
+        return err  # agent has no a2a_url
 
     try:
         target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
@@ -1077,57 +1106,42 @@ def handle_send_protocol_task(
     if reply_to_task_id:
         payload["params"]["message"]["metadata"]["reply_to_task_id"] = reply_to_task_id
 
-    headers = _auth_headers(resolved_auth)
-
     response_text = ""
     task_state = "unknown"
-    error_msg = ""
-    rpc_result = {}
 
-    try:
-        result = _http_request("POST", target_url.rstrip("/"), json_body=payload, headers=headers, timeout=timeout, a2a_version="1.0")
-    except ConnectionError:
-        error_msg = f"Cannot connect to {target_url}"
-    except TimeoutError:
-        error_msg = f"Remote agent timed out after {timeout}s"
-    except Exception as e:
-        error_msg = f"Call failed: {e}"
-    else:
-        err_msg = parse_json_rpc_error(result)
-        if err_msg:
-            error_msg = f"Remote agent error: {err_msg}"
-        else:
-            rpc_result = result.get("result", {}) or {}
-            parsed = parse_task_result(rpc_result, default_task_id=task_id)
-            task_state = parsed["state"]
-            remote_task_id = parsed["task_id"]
+    rpc_result, error_msg = _rpc_call(target_url, payload, resolved_auth, timeout)
+    if not error_msg:
+        parsed = parse_task_result(rpc_result, default_task_id=task_id)
+        task_state = parsed["state"]
+        remote_task_id = parsed["task_id"]
 
-            if task_state in ("working", "submitted") and remote_task_id and poll_attempts > 0:
-                poll_payload = build_task_get_payload(remote_task_id)
-                poll_errors = 0
-                for attempt in range(poll_attempts):
-                    time.sleep(max(0, poll_interval))
-                    try:
-                        poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers, timeout=timeout, a2a_version="1.0")
-                        if parse_json_rpc_error(poll_result):
-                            continue
-                        poll_inner = poll_result.get("result", {}) or {}
-                        poll_parsed = parse_task_result(poll_inner, default_task_id=remote_task_id)
-                        poll_state = poll_parsed["state"]
-                        if poll_state and poll_state != "unknown":
-                            rpc_result = poll_inner
-                            task_state = poll_state
-                        if is_terminal_state(poll_state):
-                            break
-                    except Exception:
-                        poll_errors += 1
+        if task_state in ("working", "submitted") and remote_task_id and poll_attempts > 0:
+            poll_payload = build_task_get_payload(remote_task_id)
+            headers = _auth_headers(resolved_auth)
+            poll_errors = 0
+            for attempt in range(poll_attempts):
+                time.sleep(max(0, poll_interval))
+                try:
+                    poll_result = _http_request("POST", target_url.rstrip("/"), json_body=poll_payload, headers=headers, timeout=timeout, a2a_version="1.0")
+                    if parse_json_rpc_error(poll_result):
                         continue
+                    poll_inner = poll_result.get("result", {}) or {}
+                    poll_parsed = parse_task_result(poll_inner, default_task_id=remote_task_id)
+                    poll_state = poll_parsed["state"]
+                    if poll_state and poll_state != "unknown":
+                        rpc_result = poll_inner
+                        task_state = poll_state
+                    if is_terminal_state(poll_state):
+                        break
+                except Exception:
+                    poll_errors += 1
+                    continue
 
-                if poll_errors == poll_attempts and not is_terminal_state(task_state):
-                    return {"error": f"All {poll_attempts} poll attempts failed. Could not determine task result."}
+            if poll_errors == poll_attempts and not is_terminal_state(task_state):
+                return {"error": f"All {poll_attempts} poll attempts failed. Could not determine task result."}
 
-            parsed = parse_task_result(rpc_result, default_task_id=task_id)
-            response_text = parsed["response"]
+        parsed = parse_task_result(rpc_result, default_task_id=task_id)
+        response_text = parsed["response"]
 
     if error_msg:
         return {"error": error_msg}
@@ -1193,36 +1207,23 @@ def handle_cancel_protocol_task(
             "response": "canceled local worker" if local_canceled else "no local worker found",
         }
 
-    resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
-    if name:
-        _agent_info, target_url, resolved_auth, allow_loopback, err = _resolve_rpc_target(name)
-        if err:
-            return err
-    else:
-        target_url = url
-        allow_loopback = False
+    direct_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
+    target_url, resolved_auth, allow_loopback, _agent_info, err = _resolve_outbound_target(name, url, direct_auth)
+    if err:
+        return err
 
     try:
         target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
     except ValueError as e:
         return {"error": str(e), "task_id": task_id, "local_canceled": local_canceled}
 
-    try:
-        result = _http_request(
-            "POST",
-            target_url.rstrip("/"),
-            json_body=build_task_cancel_payload(task_id),
-            headers=_auth_headers(resolved_auth),
-            timeout=int(timeout or _DEFAULT_TIMEOUT),
-            a2a_version="1.0",
-        )
-    except Exception as exc:
-        return {"error": f"Cancel failed: {exc}", "task_id": task_id, "local_canceled": local_canceled}
+    rpc_result, error_msg = _rpc_call(
+        target_url, build_task_cancel_payload(task_id), resolved_auth, int(timeout or _DEFAULT_TIMEOUT)
+    )
+    if error_msg:
+        return {"error": error_msg, "task_id": task_id, "local_canceled": local_canceled}
 
-    err_msg = parse_json_rpc_error(result)
-    if err_msg:
-        return {"error": f"Remote agent error: {err_msg}", "task_id": task_id, "local_canceled": local_canceled}
-    parsed = parse_task_result(result.get("result", {}) or {}, default_task_id=task_id)
+    parsed = parse_task_result(rpc_result, default_task_id=task_id)
     return {
         "task_id": parsed["task_id"],
         "state": parsed["state"],

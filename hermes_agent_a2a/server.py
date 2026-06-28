@@ -20,7 +20,12 @@ from typing import Optional
 
 from .security import audit, filter_outbound, sanitize_inbound
 from .rate_limiter import RateLimiter, RateLimitConfig
-from .a2a_spec.tasks import build_error_response
+from .a2a_spec.tasks import (
+    A2A_ERR_TASK_NOT_CANCELABLE,
+    A2A_ERR_TASK_NOT_FOUND,
+    build_error_response,
+    is_terminal_state,
+)
 from .a2a_spec.push import (
     CreateTaskPushNotificationConfigRequest,
     CreateTaskPushNotificationConfigResponse,
@@ -166,12 +171,13 @@ def _start_orphaned_task_watchdog(task_queue: TaskQueue) -> threading.Thread:
 # -------------------------------------------------------------------------
 
 def _build_paginated_task_list(page_size: int = 20, continuation_token: Optional[str] = None) -> dict:
-    """Build paginated task list from the task queue.
+    """Build a paginated task list from the task queue.
 
-    Returns a dict with:
-      items: list of task items
-      hasMore: bool indicating if more pages exist
-      nextPageToken: base64-encoded offset for next page (or None)
+    Returns the final ListTasks response shape directly:
+      task: list of Task objects for the page
+      pageSize: requested page size
+      totalSize: total number of tasks
+      nextPageToken: base64-encoded offset for the next page ("" when none)
     """
     import base64
 
@@ -340,13 +346,17 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-    def _send_rpc_error(self, code: int, message: str, status: int = 400, rpc_id: str | None = None) -> None:
-        """Send a JSON-RPC 2.0 error response. Consolidates the repeated
-        pattern that was copied across the file."""
-        error_body = {"jsonrpc": "2.0", "error": {"code": code, "message": message}}
-        if rpc_id:
-            error_body["id"] = rpc_id
-        self._send_json(error_body, status)
+    def _send_rpc_error(self, code: int, message: str, status: int = 400,
+                        rpc_id: str | None = None, data=None) -> None:
+        """Send a JSON-RPC 2.0 error response — the single error emitter for both
+        the JSON-RPC and REST paths. Always emits the proto-shaped ``data`` and
+        ``id`` fields (null when unset) so every error envelope is identical on
+        the wire.
+        """
+        self._send_json(
+            {"jsonrpc": "2.0", "error": {"code": code, "message": message, "data": data}, "id": rpc_id},
+            status,
+        )
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
@@ -457,45 +467,41 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         """Handle DELETE requests — REST push notification config delete."""
         path = self.path.split("?")[0]
-
         # F-B010: DELETE /tasks/{id}/pushNotificationConfigs/{config_id}
-        if "/pushNotificationConfigs/" in path:
-            # path = /tasks/{id}/pushNotificationConfigs/{config_id}  →  segments = ['', 'tasks', '{id}', 'pushNotificationConfigs', '{config_id}']
-            segments = path.split("/")
-            if len(segments) == 5 and segments[1] == "tasks" and segments[3] == "pushNotificationConfigs":
-                task_id = segments[2]
-                config_id = segments[4]
-                self._rest_delete_push_config(task_id, config_id)
-                return
+        # segments = ['', 'tasks', '{id}', 'pushNotificationConfigs', '{config_id}']
+        segments = path.split("/")
+        if (len(segments) == 5 and segments[1] == "tasks"
+                and segments[3] == "pushNotificationConfigs"):
+            self._rest_delete_push_config(segments[2], segments[4])
+            return
 
         self._send_json({"error": "Not found"}, 404)
 
     def do_POST(self) -> None:
         path = self.path.split("?")[0]
+        segments = path.split("/")
 
-        # F-B005: POST /message:send  (SendMessage)
-        if path == "/message:send":
-            self._do_rest_post(lambda body: self._rest_send_message(body))
-            return
-
-        # F-B009: POST /message:stream  (SendStreamingMessage)
-        if path == "/message:stream":
-            self._do_rest_post(lambda body: self._rest_send_message_stream(body))
-            return
-
-        # F-B007: POST /tasks/{id}:cancel  (CancelTask)
-        if path.startswith("/tasks/") and ":cancel" in path:
-            task_id = path.split("/tasks/")[1].split(":cancel")[0]
-            self._do_rest_post(lambda body: self._rest_cancel_task(task_id))
-            return
-
-        # F-B010: POST /tasks/{id}/pushNotificationConfigs  (CreateTaskPushNotificationConfig)
-        if path.startswith("/tasks/") and "/pushNotificationConfigs" in path:
-            segments = path.strip("/").split("/")
-            # /tasks/{id}/pushNotificationConfigs → 3 segments: ['tasks', '{id}', 'pushNotificationConfigs']
-            if len(segments) == 3 and segments[0] == "tasks" and segments[2] == "pushNotificationConfigs":
-                task_id = segments[1]
-                self._do_rest_post(lambda body: self._rest_create_push_config(task_id, body))
+        # Ordered REST route table. Every handler dispatches through
+        # _do_rest_post (auth + rate-limit + body parse); unmatched paths fall
+        # through to JSON-RPC. Precedence matters: :cancel before push-config.
+        routes = [
+            # F-B005: POST /message:send  (SendMessage)
+            (lambda p, s: p == "/message:send",
+             lambda p, s: self._do_rest_post(self._rest_send_message)),
+            # F-B009: POST /message:stream  (SendStreamingMessage)
+            (lambda p, s: p == "/message:stream",
+             lambda p, s: self._do_rest_post(self._rest_send_message_stream)),
+            # F-B007: POST /tasks/{id}:cancel  (CancelTask)
+            (lambda p, s: p.startswith("/tasks/") and ":cancel" in p,
+             lambda p, s: self._do_rest_post(
+                 lambda body: self._rest_cancel_task(p.split("/tasks/")[1].split(":cancel")[0]))),
+            # F-B010: POST /tasks/{id}/pushNotificationConfigs  (CreateTaskPushNotificationConfig)
+            (lambda p, s: len(s) == 4 and s[1] == "tasks" and s[3] == "pushNotificationConfigs",
+             lambda p, s: self._do_rest_post(lambda body: self._rest_create_push_config(s[2], body))),
+        ]
+        for pred, handler in routes:
+            if pred(path, segments):
+                handler(path, segments)
                 return
 
         # Fall through to JSON-RPC handling
@@ -503,8 +509,6 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
     def _handle_send_subscribe(self, params: dict, rpc_id) -> None:
         """Handle tasks/sendSubscribe — SSE stream via _stream_task_sse."""
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, build_error_response
-
         tid = params.get("taskId", "")
         if not tid:
             self._send_json({"jsonrpc": "2.0", "id": rpc_id,
@@ -526,7 +530,6 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def _handle_push_subscribe(self, params: dict, rpc_id) -> dict:
         """Handle push notification subscription: tasks/pushNotification/subscribe."""
         from .subscription_store import get_subscription_store
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
 
         tid = params.get("taskId", "")
         webhook_url = params.get("url", "") or params.get("webhookUrl", "")
@@ -798,31 +801,20 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
     def _do_json_rpc(self) -> None:
         """Handle JSON-RPC over POST. Replaces the old do_POST body."""
-        import logging as _dbg
-        _dbg.getLogger(__name__).info("[A2A DEBUG] _do_json_rpc path=%s client=%s", self.path, self.client_address)
+        logger.debug("_do_json_rpc path=%s client=%s", self.path, self.client_address)
         try:
             self._do_json_rpc_inner()
         except Exception as exc:
             import traceback as _tb
-            _dbg.getLogger(__name__).error("[A2A] CRASH in _do_json_rpc: %s\n%s", exc, _tb.format_exc())
+            logger.error("[A2A] CRASH in _do_json_rpc: %s\n%s", exc, _tb.format_exc())
             try:
-                self._send_json(
-                    {"jsonrpc": "2.0", "error": {"code": -32603, "message": f"Internal error: {exc}"}, "id": None},
-                    500,
-                )
+                self._send_rpc_error(-32603, f"Internal error: {exc}", 500)
             except Exception:
                 pass
 
     def _do_json_rpc_inner(self) -> None:
         if not self._check_auth():
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32603, "message": "Unauthorized", "data": None},
-                    "id": None,
-                },
-                401,
-            )
+            self._send_rpc_error(-32603, "Unauthorized", 401)
             return
 
         allowed, retry_after = self.server.limiter.allow(self._rate_limit_client_id())
@@ -834,27 +826,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
         except (ValueError, TypeError):
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32600, "message": "Invalid Content-Length", "data": None},
-                    "id": None,
-                },
-                400,
-            )
+            self._send_rpc_error(-32600, "Invalid Content-Length", 400)
             return
 
         if length <= 0 or length > 65536:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {
-                        "code": -32600,
-                        "message": f"Content-Length must be 1-65536, got {length}",
-                        "data": None,
-                    },
-                    "id": None,
-                },
+            self._send_rpc_error(
+                -32600, f"Content-Length must be 1-65536, got {length}",
                 413 if length > 65536 else 400,
             )
             return
@@ -862,14 +839,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(length))
         except Exception:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": "Parse error", "data": None},
-                    "id": None,
-                },
-                400,
-            )
+            self._send_rpc_error(-32700, "Parse error", 400)
             return
 
         method = body.get("method", "")
@@ -878,39 +848,18 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         # Reject requests without the jsonrpc field
         if body.get("jsonrpc") != "2.0":
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32600, "message": "Invalid Request: missing or invalid jsonrpc field", "data": None},
-                    "id": rpc_id if rpc_id is not None else None,
-                },
-                400,
-            )
+            self._send_rpc_error(-32600, "Invalid Request: missing or invalid jsonrpc field", 400, rpc_id)
             return
 
         audit.log("rpc_request", {"method": method, "client": self.client_address[0]})
 
         if not method:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32600, "message": "Invalid Request: missing method", "data": None},
-                    "id": rpc_id,
-                },
-                400,
-            )
+            self._send_rpc_error(-32600, "Invalid Request: missing method", 400, rpc_id)
             return
 
         handler = self._RPC_METHODS.get(method)
         if handler is None:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32601, "message": f"Method not found: {method}", "data": None},
-                    "id": rpc_id,
-                },
-                404,
-            )
+            self._send_rpc_error(-32601, f"Method not found: {method}", 404, rpc_id)
             return
 
         rpc_result = handler(self, params, rpc_id)
@@ -918,6 +867,69 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         if rpc_result is _RPC_HANDLED:
             return
         self._send_json({"jsonrpc": "2.0", "result": rpc_result, "id": rpc_id})
+
+    # -------------------------------------------------------------------------
+    # Shared task lookup + get/cancel cores (used by both JSON-RPC and REST)
+    # -------------------------------------------------------------------------
+
+    def _load_task_or_404(self, task_id: str, rpc_id=None) -> Optional[dict]:
+        """Return the task status dict, or emit a 404 task-not-found error and
+        return None. Single source of the guard previously duplicated across the
+        get/cancel handlers and every push-config endpoint."""
+        status = _ensure_task_queue().get_status(task_id)
+        if status["state"] == "unknown":
+            self._send_rpc_error(A2A_ERR_TASK_NOT_FOUND, f"Task not found: {task_id}", 404, rpc_id)
+            return None
+        return status
+
+    def _get_task_core(self, task_id: str, rpc_id=None) -> Optional[dict]:
+        """Build the proto-compliant Task object for a GetTask, or 404."""
+        status = self._load_task_or_404(task_id, rpc_id)
+        if status is None:
+            return None
+        return _build_task_object(
+            task_id=task_id, state=status["state"], response=status.get("response")
+        )
+
+    def _cancel_task_core(self, task_id: str, rpc_id=None) -> Optional[dict]:
+        """Cancel a task. Emits 404/409 and returns None on failure; returns the
+        canceled Task object on success."""
+        from .worker_registry import cancel_worker
+        status = self._load_task_or_404(task_id, rpc_id)
+        if status is None:
+            return None
+        if status["state"] in ("completed", "failed", "canceled"):
+            self._send_rpc_error(
+                A2A_ERR_TASK_NOT_CANCELABLE,
+                f"Task not cancelable: task is {status['state']}", 409, rpc_id,
+            )
+            return None
+        logger.debug("worker_cancel for %s: %s", task_id, cancel_worker(task_id))
+        _ensure_task_queue().cancel(task_id)
+        return _build_task_object(task_id=task_id, state="canceled")
+
+    def _emit_get_task_artifacts(self, task_id: str, result: dict) -> None:
+        """Best-effort: emit TaskArtifactUpdateEvent over any open SSE streams for
+        a GetTask poll response. JSON-RPC-only behaviour."""
+        try:
+            from .sse_handler import emit_artifact_event, get_sse_streamer
+            streamer = get_sse_streamer()
+            stream_ids = streamer.get_stream_ids_for_task(task_id)
+            if not stream_ids:
+                return
+            pending_task = _ensure_task_queue().find_task_by_id(task_id)
+            ctx_id = pending_task.context_id if pending_task else task_id
+            for artifact in result.get("artifacts", []):
+                evt = emit_artifact_event(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    artifact=artifact,
+                    metadata={"index": artifact.get("index")},
+                )
+                for sid in stream_ids:
+                    streamer.push_event(sid, evt)
+        except Exception:
+            pass  # SSE delivery is best-effort
 
     # -------------------------------------------------------------------------
     # JSON-RPC method handlers — each returns the `result` payload to wrap, or
@@ -932,71 +944,17 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
     def _rpc_get_task(self, params: dict, rpc_id):
         tid = params.get("id", "")
-        status = _ensure_task_queue().get_status(tid)
-        if status["state"] == "unknown":
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -38000, "message": f"Task not found: {tid}", "data": None},
-                    "id": rpc_id,
-                },
-                404,
-            )
+        result = self._get_task_core(tid, rpc_id)
+        if result is None:
             return _RPC_HANDLED
-        # Build full proto-compliant Task per a2a.proto:163-183
-        result = _build_task_object(
-            task_id=tid,
-            state=status["state"],
-            response=status.get("response"),
-        )
-        # Emit TaskArtifactUpdateEvent over SSE for GetTask polling responses
-        try:
-            from .sse_handler import emit_artifact_event, get_sse_streamer
-            streamer = get_sse_streamer()
-            stream_ids = streamer.get_stream_ids_for_task(tid)
-            if stream_ids:
-                pending_task = _ensure_task_queue().find_task_by_id(tid)
-                ctx_id = pending_task.context_id if pending_task else tid
-                for artifact in result.get("artifacts", []):
-                    evt = emit_artifact_event(
-                        task_id=tid,
-                        context_id=ctx_id,
-                        artifact=artifact,
-                        metadata={"index": artifact.get("index")},
-                    )
-                    for sid in stream_ids:
-                        streamer.push_event(sid, evt)
-        except Exception:
-            pass  # SSE delivery is best-effort
+        self._emit_get_task_artifacts(tid, result)
         return {"task": result}
 
     def _rpc_cancel_task(self, params: dict, rpc_id):
-        tid = params.get("id", "")
-        from .worker_registry import cancel_worker
-        status = _ensure_task_queue().get_status(tid)
-        if status["state"] == "unknown":
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -38000, "message": f"Task not found: {tid}", "data": None},
-                    "id": rpc_id,
-                },
-                404,
-            )
+        result = self._cancel_task_core(params.get("id", ""), rpc_id)
+        if result is None:
             return _RPC_HANDLED
-        if status["state"] in ("completed", "failed", "canceled"):
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -38001, "message": f"Task not cancelable: task is {status['state']}", "data": None},
-                    "id": rpc_id,
-                },
-                409,
-            )
-            return _RPC_HANDLED
-        logger.debug("worker_cancel for %s: %s", tid, cancel_worker(tid))
-        _ensure_task_queue().cancel(tid)
-        return {"task": _build_task_object(task_id=tid, state="canceled")}
+        return {"task": result}
 
     def _rpc_subscribe_to_task(self, params: dict, rpc_id):
         self._handle_send_subscribe(params, rpc_id)
@@ -1005,14 +963,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def _rpc_list_tasks(self, params: dict, rpc_id):
         page_size = min(max(int(params.get("pageSize", 20)), 1), 100)
         token = params.get("continuationToken")
-        result = _build_paginated_task_list(page_size, token)
-        # ListTasksResponse: repeated Task task + pagination metadata at top level
-        return {
-            "task": result.get("task", []),
-            "pageSize": result.get("pageSize"),
-            "totalSize": result.get("totalSize"),
-            "nextPageToken": result.get("nextPageToken"),
-        }
+        # _build_paginated_task_list already returns the ListTasksResponse shape.
+        return _build_paginated_task_list(page_size, token)
 
     # JSON-RPC method → handler dispatch table (order-independent).
     _RPC_METHODS = {
@@ -1029,20 +981,9 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
     def _rest_get_task(self, task_id: str) -> None:
         """F-B001: GET /tasks/{id} — return Task object."""
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
-        status = _ensure_task_queue().get_status(task_id)
-        if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+        result = self._get_task_core(task_id)
+        if result is None:
             return
-        # Build full proto-compliant Task per a2a.proto:163-183
-        result = _build_task_object(
-            task_id=task_id,
-            state=status["state"],
-            response=status.get("response"),
-        )
         self._send_json({"task": result})
 
     def _rest_list_tasks(self) -> None:
@@ -1063,31 +1004,13 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         page_size = max(1, min(page_size, 100))  # clamp to [1, 100]
         continuation_token = params.get("continuation_token", [None])[0]
 
-        result = _build_paginated_task_list(page_size, continuation_token)
-        self._send_json({"task": result.get("task", []), "pageSize": result.get("pageSize"), "totalSize": result.get("totalSize"), "nextPageToken": result.get("nextPageToken")})
+        self._send_json(_build_paginated_task_list(page_size, continuation_token))
 
     def _rest_cancel_task(self, task_id: str) -> None:
         """F-B007: POST /tasks/{id}:cancel — cancel a pending task."""
-        from .worker_registry import cancel_worker
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, A2A_ERR_TASK_NOT_CANCELABLE
-
-        status = _ensure_task_queue().get_status(task_id)
-        if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+        result = self._cancel_task_core(task_id)
+        if result is None:
             return
-        if status["state"] in ("completed", "failed", "canceled"):
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_CANCELABLE, "message": f"Task not cancelable: task is {status['state']}"}},
-                409,
-            )
-            return
-        logger.debug("worker_cancel for %s: %s", task_id, cancel_worker(task_id))
-        _ensure_task_queue().cancel(task_id)
-        # Build full proto-compliant Task per a2a.proto:163-183
-        result = _build_task_object(task_id=task_id, state="canceled")
         self._send_json({"task": result})
 
     def _rest_subscribe_to_task(self, task_id: str) -> None:
@@ -1188,7 +1111,6 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def _sse_poll_until_terminal(self, send_line, streamer, stream_id: str,
                                  task_id: str, context_id: Optional[str] = None) -> None:
         """Poll the queue, flushing pending events until terminal state, disconnect, or timeout."""
-        from .a2a_spec.tasks import is_terminal_state
         poll_interval = 0.5  # 5x fewer wakeups than 0.1s, still responsive (<1s latency)
         deadline = time.time() + float(os.getenv("A2A_SSE_TIMEOUT", "300"))
 
@@ -1212,8 +1134,6 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def _stream_task_sse(self, task_id: str, extra_headers: dict | None = None,
                           http_method: str = "POST") -> None:
         """SSE stream for an existing task — used by JSON-RPC + REST subscribe."""
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state
-
         status = _ensure_task_queue().get_status(task_id)
         if status["state"] == "unknown":
             self._send_rpc_error(A2A_ERR_TASK_NOT_FOUND, f"Task not found: {task_id}", 404)
@@ -1304,14 +1224,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         """
         if not self._check_hmac_push(required=True):
             return
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
-
-        status = _ensure_task_queue().get_status(task_id)
-        if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+        if self._load_task_or_404(task_id) is None:
             return
 
         url = body.get("url", "")
@@ -1369,14 +1282,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         """
         if not self._check_hmac_push(required=True):
             return
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
-
-        status = _ensure_task_queue().get_status(task_id)
-        if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+        if self._load_task_or_404(task_id) is None:
             return
 
         req = GetTaskPushNotificationConfigRequest(task_id=task_id, config_id=config_id)
@@ -1400,14 +1306,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         Uses ListTaskPushNotificationConfigsRequest + list_push_configs from push_delivery.
         """
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
-
-        status = _ensure_task_queue().get_status(task_id)
-        if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+        if self._load_task_or_404(task_id) is None:
             return
 
         req = ListTaskPushNotificationConfigsRequest(task_id=task_id)
@@ -1429,14 +1328,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         """
         if not self._check_hmac_push(required=True):
             return
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND
-
-        status = _ensure_task_queue().get_status(task_id)
-        if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+        if self._load_task_or_404(task_id) is None:
             return
 
         req = DeleteTaskPushNotificationConfigRequest(task_id=task_id, config_id=config_id)
