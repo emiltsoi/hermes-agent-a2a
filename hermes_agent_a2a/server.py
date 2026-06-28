@@ -659,15 +659,23 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         return result
 
 
-    def _enqueue_and_await_task(self, task_id: str, user_text: str, metadata: dict,
-                                 context_id: str, idem_key: str | None,
-                                 idem_payload: dict, rpc_id=None) -> dict | None:
-        """Shared core: sanitize, enqueue, wait, filter. Used by both
-        _handle_task_send (JSON-RPC) and _rest_send_message (REST).
+    def _prepare_and_enqueue(self, task_id: str, user_text: str, metadata: dict,
+                             context_id: str, idem_key: str | None,
+                             idem_payload: dict):
+        """Shared inbound preamble: sanitize, mark origin, enforce idempotency
+        and task-ID collision guards, then enqueue. Used by all three inbound
+        paths (_handle_task_send, _rest_send_message, _rest_send_message_stream)
+        so every transport gets the same guards.
 
-        Returns the filtered result dict on success, or None if the task
-        timed out without a response. Callers handle their own response
-        formatting, SSE/push delivery, and error-reporting.
+        Returns the enqueued ``_PendingTask`` on success, or a sentinel tuple the
+        caller translates into its transport-specific response:
+
+          ("CONFLICT", code, http_status, message) — idem conflict or id collision
+          ("BUSY",     code, http_status, message) — queue is full
+          ("REPLAY",   cached_result)              — idempotent replay; reuse result
+
+        This method never writes a response itself, so callers are free to render
+        a JSON-RPC error, a REST JSON error, or an SSE error event as appropriate.
         """
         user_text = sanitize_inbound(user_text)
         metadata["_a2a_origin"] = "peer"
@@ -682,28 +690,48 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         if idem_key:
             conflict, existing_task_id = idem_store.check_conflict(idem_key, idem_payload)
             if conflict:
-                self._send_rpc_error(
-                    -38004,
+                return (
+                    "CONFLICT", -38004, 409,
                     f"Non-idempotent task: idempotency key '{idem_key}' already used with a different payload",
-                    409, rpc_id
                 )
-                return "CONFLICT"
             cached = idem_store.get(idem_key)
             if cached is not None:
                 cached_task_id, cached_result = cached
                 logger.debug("[A2A] Idempotency replay for key=%s → task_id=%s", idem_key, cached_task_id)
-                return cached_result
+                return ("REPLAY", cached_result)
 
         # Task-ID collision check
         if q.find_task_by_id(task_id) is not None:
-            self._send_rpc_error(-38004, "Task ID already in use", 409, rpc_id)
-            return "CONFLICT"
+            return ("CONFLICT", -38004, 409, "Task ID already in use")
 
         task = q.enqueue(task_id, user_text, metadata, context_id=context_id)
         if task is None:
-            self._send_rpc_error(-32603, "Agent busy — too many pending tasks", 503, rpc_id)
-            return "BUSY"
+            return ("BUSY", -32603, 503, "Agent busy — too many pending tasks")
 
+        return task
+
+    def _enqueue_and_await_task(self, task_id: str, user_text: str, metadata: dict,
+                                 context_id: str, idem_key: str | None,
+                                 idem_payload: dict, rpc_id=None) -> dict | None:
+        """Synchronous core: prepare + enqueue, wait for the worker, filter the
+        result. Used by _handle_task_send (JSON-RPC) and _rest_send_message (REST).
+
+        Returns the filtered result dict on success, the cached result on an
+        idempotent replay, or None if the task timed out. On CONFLICT/BUSY it
+        sends the JSON-RPC error itself and returns the matching sentinel string.
+        """
+        outcome = self._prepare_and_enqueue(
+            task_id, user_text, metadata, context_id, idem_key, idem_payload
+        )
+        if isinstance(outcome, tuple):
+            kind = outcome[0]
+            if kind == "REPLAY":
+                return outcome[1]  # cached result dict
+            _, code, http_status, message = outcome
+            self._send_rpc_error(code, message, http_status, rpc_id)
+            return kind  # "CONFLICT" or "BUSY"
+
+        task = outcome
         _start_async_webhook_delivery(task_id)
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
@@ -723,7 +751,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         )
 
         if idem_key:
-            idem_store.set(idem_key, task_id, idem_payload, result)
+            from .persistence import get_idempotency_store
+            get_idempotency_store().set(idem_key, task_id, idem_payload, result)
 
         return result
 
@@ -1215,20 +1244,28 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        user_text = sanitize_inbound(user_text)
         metadata = message.get("metadata", {})
         task_id = body.get("id") or str(uuid.uuid4())
         context_id = body.get("contextId") or metadata.get("context_id") or task_id
 
         _resolve_sender_name(metadata, body, self.client_address[0])
-        metadata["_a2a_origin"] = "peer"
 
-        q = _ensure_task_queue()
-        task = q.enqueue(task_id, user_text, metadata, context_id=context_id)
-        if task is None:
+        # Route through the shared preamble so the streaming endpoint gets the
+        # same idempotency + task-ID collision guards as the JSON-RPC/REST paths.
+        idem_key = body.get("idempotencyKey")
+        outcome = self._prepare_and_enqueue(task_id, user_text, metadata, context_id, idem_key, body)
+        if isinstance(outcome, tuple):
+            kind = outcome[0]
+            if kind == "REPLAY":
+                # Idempotent replay: stream the cached result instead of re-enqueuing.
+                self._stream_cached_result(outcome[1], context_id)
+                return
+            # CONFLICT/BUSY fire before the SSE stream opens, so surface them as a
+            # JSON HTTP error (matching the prior pre-stream busy behaviour).
+            _, code, http_status, err_message = outcome
             self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32603, "message": "Agent busy — too many pending tasks"}},
-                503,
+                {"jsonrpc": "2.0", "error": {"code": code, "message": err_message}},
+                http_status,
             )
             return
 
@@ -1240,6 +1277,24 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return
 
         self._sse_poll_until_terminal(send_line, streamer, stream_id, task_id, context_id)
+
+    def _stream_cached_result(self, cached_result: dict, fallback_context_id: str) -> None:
+        """Stream a cached idempotent result as an SSE lifecycle without enqueuing.
+
+        Mirrors the normal completion path (a ``working`` event followed by a
+        terminal status update); the client retrieves the response body via
+        tasks/get, exactly as it would for a freshly completed stream.
+        """
+        replay_task_id = cached_result.get("id") or fallback_context_id
+        replay_ctx = cached_result.get("context_id") or fallback_context_id
+        terminal_state = cached_result.get("status", {}).get("state", "completed")
+
+        streamer, stream_id, send_line = self._open_sse_stream(replay_task_id, http_method="POST")
+        if not self._sse_emit(send_line, replay_task_id, "working", replay_ctx):
+            streamer.close_stream(stream_id)
+            return
+        self._sse_emit(send_line, replay_task_id, terminal_state, replay_ctx, with_id=False)
+        streamer.close_stream(stream_id)
 
     def _rest_create_push_config(self, task_id: str, body: dict) -> None:
         """F-B010: POST /tasks/{id}/pushNotificationConfigs — create a push config.
