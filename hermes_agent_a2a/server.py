@@ -631,12 +631,12 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return True
         if required:
             if not hmac_key or hmac_key != expected_key:
-                self._send_json({"jsonrpc": "2.0", "error": {"code": -32603, "message": "Unauthorized"}}, 401)
+                self._send_rpc_error(-32603, "Unauthorized", 401)
                 return False
         else:
             # Read-only: optional auth — if key is provided it must be valid
             if hmac_key and hmac_key != expected_key:
-                self._send_json({"jsonrpc": "2.0", "error": {"code": -32603, "message": "Unauthorized"}}, 401)
+                self._send_rpc_error(-32603, "Unauthorized", 401)
                 return False
         return True
 
@@ -656,6 +656,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
         self.end_headers()
         self.wfile.write(body)
+
+
+    def _send_rpc_error(self, code: int, message: str, status: int = 400, rpc_id: str | None = None) -> None:
+        """Send a JSON-RPC 2.0 error response. Consolidates the repeated
+        pattern that was copied across the file."""
+        error_body = {"jsonrpc": "2.0", "error": {"code": code, "message": message}}
+        if rpc_id:
+            error_body["id"] = rpc_id
+        self._send_json(error_body, status)
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
@@ -1293,7 +1302,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
         except (ValueError, TypeError):
-            self._send_json({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Content-Length"}}, 400)
+            self._send_rpc_error(-32600, "Invalid Content-Length", 400)
             return
 
         if length <= 0 or length > 65536:
@@ -1306,7 +1315,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(length))
         except Exception:
-            self._send_json({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}}, 400)
+            self._send_rpc_error(-32700, "Parse error", 400)
             return
 
         audit.log("rest_request", {"path": self.path, "client": self.client_address[0]})

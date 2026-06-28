@@ -207,6 +207,48 @@ def _validate_webhook_reachable(webhook_url: str, timeout: int = 5) -> tuple[boo
     except Exception as exc:
         return False, f"Webhook unreachable: {exc}"
 
+
+
+def _resolve_target(agent_name: str | None, url: str | None, 
+                    auth_token: str | None, auth_type: str | None,
+                    auth_header: str | None, auth_value: str | None,
+                    timeout: int, allow_loopback: bool = False
+                    ) -> tuple[str, dict, Exception | None]:
+    """Resolve an A2A target agent to URL and auth params.
+    
+    Returns (target_url, auth_kwargs, None) on success,
+            ("", {}, ValueError) on failure.
+    Common code extracted from handle_discover, handle_send_protocol_task,
+    and handle_cancel_protocol_task.
+    """
+    from .identity import get_identity
+    from .persistence import load_identity_store
+    
+    if agent_name:
+        store = load_identity_store()
+        identity = get_identity(agent_name, store)
+        if identity is None:
+            return "", {}, ValueError(f"Agent '{agent_name}' not found in identity store")
+        target_url = identity.get("url", "")
+        auth_token_val = identity.get("auth_token", "")
+    elif url:
+        target_url = url
+        auth_token_val = auth_token or ""
+    else:
+        return "", {}, ValueError("Either agent name or URL is required")
+    
+    target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
+    
+    auth_kwargs = {}
+    if auth_token_val:
+        if auth_type and auth_type != "none":
+            auth_kwargs["auth_token"] = auth_token_val
+            if auth_type:
+                auth_kwargs["auth_type"] = auth_type
+        else:
+            auth_kwargs["auth_token"] = auth_token_val
+    
+    return target_url, auth_kwargs, None
 _DEFAULT_TIMEOUT = int(os.getenv("A2A_DEFAULT_TIMEOUT", "120"))
 _POLL_INTERVAL = int(os.getenv("A2A_POLL_INTERVAL", "5"))
 _POLL_MAX_ATTEMPTS = int(os.getenv("A2A_POLL_MAX_ATTEMPTS", "60"))
