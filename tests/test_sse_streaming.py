@@ -401,9 +401,9 @@ class TestSSEPollInterval:
         import inspect
         from hermes_agent_a2a.server import A2ARequestHandler
 
-        source = inspect.getsource(A2ARequestHandler._rest_subscribe_to_task)
+        source = inspect.getsource(A2ARequestHandler._stream_task_sse)
         # Verify poll_interval is set to 0.5, not 0.1
         assert "poll_interval = 0.5" in source, (
-            "SSE subscribe loop must use poll_interval=0.5 to avoid blocking threads. "
+            "SSE stream must use poll_interval=0.5 to avoid blocking threads. "
             "Found source:\n" + source[source.find("poll_interval"):source.find("poll_interval")+30]
         )

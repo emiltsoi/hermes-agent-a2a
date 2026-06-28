@@ -915,107 +915,26 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self._do_json_rpc()
 
     def _handle_send_subscribe(self, params: dict, rpc_id) -> None:
-        """Handle tasks/sendSubscribe — stream SSE events to the client.
-
-        Writes headers + initial state event directly to wfile, then loops
-        polling pending events until the task reaches a terminal state or the
-        client disconnects.
-        """
-        from .sse_handler import get_sse_streamer
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state, build_error_response
+        """Handle tasks/sendSubscribe — SSE stream via _stream_task_sse."""
+        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, build_error_response
 
         tid = params.get("taskId", "")
         if not tid:
-            self._send_json({"jsonrpc": "2.0", "id": rpc_id, "error": build_error_response(-32600, "Invalid Request: taskId is required", id=rpc_id)})
+            self._send_json({"jsonrpc": "2.0", "id": rpc_id,
+                             "error": build_error_response(-32600, "Invalid Request: taskId is required", id=rpc_id)})
             return
 
-        q = _ensure_task_queue()
-        status = q.get_status(tid)
+        status = _ensure_task_queue().get_status(tid)
         if status["state"] == "unknown":
-            self._send_json({"jsonrpc": "2.0", "id": rpc_id, "error": build_error_response(A2A_ERR_TASK_NOT_FOUND, f"Task not found: {tid}", id=rpc_id)})
+            self._send_json({"jsonrpc": "2.0", "id": rpc_id,
+                             "error": build_error_response(A2A_ERR_TASK_NOT_FOUND, f"Task not found: {tid}", id=rpc_id)})
             return
 
-        streamer = get_sse_streamer()
-        stream_id = streamer.open_stream(tid)
-        current_state = status.get("state", "unknown")
-
-        # Send SSE headers directly — bypass _send_json so Content-Type is text/event-stream
-        import json
-        from .hooks import _event_name_for_state as _event_name
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        # Do NOT send Connection: keep-alive — closing the SSE stream should close
-        # the TCP connection so urllib.request.urlopen.read() returns after data.
-        self.close_connection = True
-        self.send_header("X-Stream-Id", stream_id)
-        # A2A protocol headers per Section 3.2.6
-        self.send_header("A2A-Version", A2A_VERSION)
+        extra_headers = {"A2A-Version": A2A_VERSION}
         extensions = _get_a2a_extensions()
         if extensions:
-            self.send_header("A2A-Extensions", extensions)
-        self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
-        self.end_headers()
-
-        def _send_line(line: str) -> bool:
-            """Send one SSE line. Returns False on client disconnect."""
-            try:
-                self.wfile.write(line.encode())
-                self.wfile.flush()
-                return True
-            except Exception:
-                return False
-
-        # Initial state event (TaskStatusUpdateEvent per a2a.proto:788-800)
-        initial_event_id = str(uuid.uuid4())
-        initial_payload = json.dumps(_build_status_update_payload(tid, current_state), ensure_ascii=False)
-        if not _send_line(f"id: {initial_event_id}\n"):
-            streamer.close_stream(stream_id)
-            return
-        if not _send_line(f"event: {_event_name(current_state)}\n"):
-            streamer.close_stream(stream_id)
-            return
-        if not _send_line(f"data: {initial_payload}\n\n"):
-            streamer.close_stream(stream_id)
-            return
-
-        # If already terminal, close stream immediately after initial event
-        if is_terminal_state(current_state):
-            streamer.close_stream(stream_id)
-            return
-
-        # Stream pending events until terminal state or client disconnect
-        poll_interval = 0.5  # seconds — 5x fewer wakeups than 0.1s, still responsive
-        max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))
-        deadline = time.time() + max_wait
-
-        while time.time() < deadline:
-            lines = streamer.get_pending(stream_id)
-            for line in lines:
-                if not _send_line(line):
-                    streamer.close_stream(stream_id)
-                    return
-
-            if streamer.is_closed(stream_id):
-                return
-
-            status = q.get_status(tid)
-            if is_terminal_state(status.get("state", "")):
-                term_state = status["state"]
-                term_payload = json.dumps(_build_status_update_payload(tid, term_state), ensure_ascii=False)
-                _send_line(f"event: {_event_name(term_state)}\n")
-                _send_line(f"data: {term_payload}\n\n")
-                streamer.close_stream(stream_id)
-                return
-
-            time.sleep(poll_interval)
-
-        # Timeout
-        _send_line('event: error\ndata: {"code": -38000, "message": "SSE stream timed out"}\n\n')
-        streamer.close_stream(stream_id)
+            extra_headers["A2A-Extensions"] = extensions
+        self._stream_task_sse(tid, extra_headers=extra_headers, http_method="POST")
 
     def _handle_push_subscribe(self, params: dict, rpc_id) -> dict:
         """Handle push notification subscription: tasks/pushNotification/subscribe."""
@@ -1083,14 +1002,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         message = params.get("message", {})
         configuration = params.get("configuration", {})
 
-        # Extract SendMessageConfiguration fields per a2a.proto:143-161
         return_immediately = configuration.get("return_immediately", False)
         push_config = configuration.get("task_push_notification_config")
-        # NOTE: accepted_output_modes and history_length are accepted per spec
-        # but not yet wired into local-task handling. See MED-03/LOW-03 notes
-        # in the review (a2a-review-20260602) — the assignments were F841 dead
-        # locals, removed.
-
         if push_config:
             logger.debug("[A2A] SendMessageConfiguration task_push_notification_config not yet implemented for local tasks")
 
@@ -1101,38 +1014,84 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         user_text = "\n".join(text_parts)
 
         if not user_text.strip():
-            return _build_task_object(
-                task_id=task_id,
-                state="failed",
-                response="Empty message",
-            )
+            return _build_task_object(task_id=task_id, state="failed", response="Empty message")
 
-        user_text = sanitize_inbound(user_text)
         metadata = message.get("metadata", {})
-        # Extract context_id from top-level params or message metadata (required per spec)
         context_id = params.get("contextId") or metadata.get("context_id") or task_id
         hermes_meta = metadata.get("hermes", {}) if isinstance(metadata.get("hermes", {}), dict) else {}
         worker_at = metadata.get("worker_at", "")
 
-        # worker_at=target: distributed ephemeral worker — bypass queue, webhook,
-        # task.ready.wait(). Run local worker directly and return result synchronously.
         if worker_at == "target" or hermes_meta.get("execution") == "remote_subprocess":
-            import logging as _log
-            _log.getLogger(__name__).info("[A2A] worker_at=target — dispatching to _handle_task_send_mode3")
             from .tool_handlers import _handle_task_send_mode3
             return _handle_task_send_mode3(params, metadata, user_text, context_id)
 
+        if return_immediately:
+            context_id_val = context_id or task_id
+            return _build_task_object(task_id=task_id, state="working",
+                                      context_id=context_id_val,
+                                      response="(processing — poll with tasks/get)")
+
         if "sender_name" not in metadata:
             from_field = params.get("from") or params.get("sender", {}).get("name")
-            metadata["sender_name"] = (
-                from_field
-                or metadata.get("agent_name")
-                or f"agent-{self.client_address[0]}"
-            )
+            metadata["sender_name"] = (from_field or metadata.get("agent_name")
+                                       or f"agent-{self.client_address[0]}")
         raw_name = metadata.get("sender_name", "") or ""
         metadata["sender_name"] = "".join(c for c in raw_name if c.isalnum() or c in "-_.@ ")[:64]
 
-        # Mark peer-originated tasks so hooks bypass Telegram webhook delivery
+        idem_key = params.get("idempotencyKey")
+        result = self._enqueue_and_await_task(task_id, user_text, metadata,
+                                               context_id, idem_key, params, rpc_id)
+        if result == "CONFLICT" or result == "BUSY":
+            return  # error already sent by _enqueue_and_await_task
+        if result is None:
+            return _build_task_object(task_id=task_id, state="working",
+                                      context_id=context_id,
+                                      response="(processing — poll with tasks/get)")
+
+        # SSE + push artifact delivery (JSON-RPC only feature)
+        ctx_id = context_id or task_id
+        try:
+            from .sse_handler import emit_artifact_event, get_sse_streamer
+            streamer = get_sse_streamer()
+            stream_ids = streamer.get_stream_ids_for_task(task_id)
+            if stream_ids:
+                for artifact in result.get("artifacts", []):
+                    evt = emit_artifact_event(task_id=task_id, context_id=ctx_id,
+                                              artifact=artifact,
+                                              metadata={"index": artifact.get("index")})
+                    for sid in stream_ids:
+                        streamer.push_event(sid, evt)
+        except Exception as e:
+            logger.warning("[A2A] SSE delivery failed for task %s: %s", task_id, e)
+        try:
+            from .subscription_store import get_subscription_store
+            from .push_delivery import get_push_delivery
+            store = get_subscription_store()
+            pusher = get_push_delivery()
+            subs = store.get(task_id)
+            for sub in subs:
+                for artifact in result.get("artifacts", []):
+                    payload = {"artifact_update": {"contextId": ctx_id, "taskId": task_id,
+                                                   "artifact": artifact,
+                                                   "metadata": {"index": artifact.get("index")}}}
+                    pusher.deliver_with_retry(sub.url, payload, sub.hmac_key)
+        except Exception as e:
+            logger.warning("[A2A] Push notification delivery failed for task %s: %s", task_id, e)
+
+        return result
+
+
+    def _enqueue_and_await_task(self, task_id: str, user_text: str, metadata: dict,
+                                 context_id: str, idem_key: str | None,
+                                 idem_payload: dict, rpc_id=None) -> dict | None:
+        """Shared core: sanitize, enqueue, wait, filter. Used by both
+        _handle_task_send (JSON-RPC) and _rest_send_message (REST).
+
+        Returns the filtered result dict on success, or None if the task
+        timed out without a response. Callers handle their own response
+        formatting, SSE/push delivery, and error-reporting.
+        """
+        user_text = sanitize_inbound(user_text)
         metadata["_a2a_origin"] = "peer"
 
         audit.log("task_received", {"task_id": task_id, "length": len(user_text)})
@@ -1142,25 +1101,15 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         # --- Idempotency check first (before task_id collision check) ---
         from .persistence import get_idempotency_store
         idem_store = get_idempotency_store()
-        idem_key = params.get("idempotencyKey")
         if idem_key:
-            # Check for payload conflict
-            conflict, existing_task_id = idem_store.check_conflict(idem_key, params)
+            conflict, existing_task_id = idem_store.check_conflict(idem_key, idem_payload)
             if conflict:
-                self._send_json(
-                    {
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -38004,
-                            "message": f"Non-idempotent task: idempotency key '{idem_key}' already used with a different payload",
-                            "data": {"existingTaskId": existing_task_id},
-                        },
-                        "id": rpc_id,
-                    },
-                    409,
+                self._send_rpc_error(
+                    -38004,
+                    f"Non-idempotent task: idempotency key '{idem_key}' already used with a different payload",
+                    409, rpc_id
                 )
-                return
-            # Return cached result on replay
+                return "CONFLICT"
             cached = idem_store.get(idem_key)
             if cached is not None:
                 cached_task_id, cached_result = cached
@@ -1169,57 +1118,21 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 
         # Task-ID collision check
         if q.find_task_by_id(task_id) is not None:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -38004, "message": "Task ID already in use", "data": None},
-                    "id": rpc_id,
-                },
-                409,
-            )
-            return
+            self._send_rpc_error(-38004, "Task ID already in use", 409, rpc_id)
+            return "CONFLICT"
 
         task = q.enqueue(task_id, user_text, metadata, context_id=context_id)
         if task is None:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32603, "message": "Agent busy — too many pending tasks", "data": None},
-                    "id": rpc_id,
-                },
-                503,
-            )
-            return
+            self._send_rpc_error(-32603, "Agent busy — too many pending tasks", 503, rpc_id)
+            return "BUSY"
 
-        # Wake up the gateway via internal webhook. deliver_only=True tells
-        # the webhook handler to invoke the agent without routing to Telegram.
-        # The agent's pre_llm_call hook drains the shared task queue, processes
-        # the task, and post_llm_call marks it complete.
         _start_async_webhook_delivery(task_id)
-
-        # Per SendMessageConfiguration.return_immediately (a2a.proto:143-161):
-        # If True, return immediately without waiting for task completion.
-        if return_immediately:
-            task._returned = True
-            return _build_task_object(
-                task_id=task_id,
-                state="working",
-                context_id=task.context_id,
-                response="(processing — poll with tasks/get)",
-            )
 
         task.ready.wait(timeout=_RESPONSE_TIMEOUT)
 
         if task.response is None:
-            # Timed out without any gateway response — mark as returned so any
-            # late gateway completion is ignored (not silently lost to caller).
             task._returned = True
-            return _build_task_object(
-                task_id=task_id,
-                state="working",
-                context_id=task.context_id,
-                response="(processing — poll with tasks/get)",
-            )
+            return None  # timeout
 
         filtered = filter_outbound(task.response)
         audit.log("task_completed", {"task_id": task_id, "response_length": len(filtered)})
@@ -1231,49 +1144,8 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             response=filtered,
         )
 
-        # Store result for idempotency replay
         if idem_key:
-            idem_store.set(idem_key, task_id, params, result)
-
-        # Emit TaskArtifactUpdateEvent over SSE and push delivery for each artifact
-        ctx_id = task.context_id or task_id
-        try:
-            from .sse_handler import emit_artifact_event, get_sse_streamer
-            streamer = get_sse_streamer()
-            stream_ids = streamer.get_stream_ids_for_task(task_id)
-            if stream_ids:
-                for artifact in result.get("artifacts", []):
-                    evt = emit_artifact_event(
-                        task_id=task_id,
-                        context_id=ctx_id,
-                        artifact=artifact,
-                        metadata={"index": artifact.get("index")},
-                    )
-                    for sid in stream_ids:
-                        streamer.push_event(sid, evt)
-        except Exception as e:
-            logger.warning("[A2A] SSE delivery failed for task %s: %s", task_id, e)
-
-        # Also deliver artifact events as push notifications to webhook subscribers
-        try:
-            from .subscription_store import get_subscription_store
-            from .push_delivery import get_push_delivery
-            store = get_subscription_store()
-            pusher = get_push_delivery()
-            subs = store.get(task_id)
-            for sub in subs:
-                for artifact in result.get("artifacts", []):
-                    payload = {
-                        "artifact_update": {
-                            "contextId": ctx_id,
-                            "taskId": task_id,
-                            "artifact": artifact,
-                            "metadata": {"index": artifact.get("index")},
-                        }
-                    }
-                    pusher.deliver_with_retry(sub.url, payload, sub.hmac_key)
-        except Exception as e:
-            logger.warning("[A2A] Push notification delivery failed for task %s: %s", task_id, e)
+            idem_store.set(idem_key, task_id, idem_payload, result)
 
         return result
 
@@ -1591,31 +1463,92 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         self._send_json({"task": result})
 
     def _rest_subscribe_to_task(self, task_id: str) -> None:
-        """F-B008: GET /tasks/{id}:subscribe — SSE stream for task updates."""
-        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state
+        """F-B008: GET /tasks/{id}:subscribe — SSE stream via _stream_task_sse."""
+        self._stream_task_sse(task_id, http_method="GET")
+
+    def _rest_send_message(self, body: dict) -> None:
+        """F-B005: POST /message:send — send a message and return a task result."""
+        message = body.get("message", {})
+        text_parts = []
+        for part in message.get("parts", []):
+            if "text" in part:
+                text_parts.append(part.get("text", ""))
+        user_text = "\n".join(text_parts)
+
+        if not user_text.strip():
+            self._send_json({
+                "id": str(uuid.uuid4()),
+                "status": {"state": "failed"},
+                "artifacts": [{"parts": [{"text": "Empty message"}], "index": 0}],
+            })
+            return
+
+        metadata = message.get("metadata", {})
+        task_id = body.get("id") or str(uuid.uuid4())
+        context_id = body.get("contextId") or metadata.get("context_id") or task_id
+
+        if "sender_name" not in metadata:
+            from_field = body.get("from") or body.get("sender", {}).get("name")
+            metadata["sender_name"] = (from_field or metadata.get("agent_name")
+                                       or f"agent-{self.client_address[0]}")
+        raw_name = metadata.get("sender_name", "") or ""
+        metadata["sender_name"] = "".join(c for c in raw_name if c.isalnum() or c in "-_.@ ")[:64]
+
+        idem_key = body.get("idempotencyKey")
+        result = self._enqueue_and_await_task(task_id, user_text, metadata,
+                                               context_id, idem_key, body)
+
+        if result == "CONFLICT" or result == "BUSY":
+            return
+        if result is None:
+            self._send_json({
+                "id": task_id,
+                "status": {"state": "working"},
+                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
+            }, 200)
+            return
+
+        self._send_json({
+            "id": task_id,
+            "status": {"state": "completed"},
+            "artifacts": [{"parts": [{"text": result.get("response", "")}], "index": 0}],
+        }, 200)
+
+
+    def _stream_task_sse(self, task_id: str, extra_headers: dict | None = None,
+                          http_method: str = "POST") -> None:
+        """Unified SSE streaming core — used by both JSON-RPC subscribe and REST subscribe.
+
+        Backports the disconnect-check-on-terminal bugfix from the REST
+        handler.  extra_headers dict adds A2A-Version / A2A-Extensions
+        for the JSON-RPC path.  http_method controls CORS.
+        """
         from .sse_handler import get_sse_streamer
-        from .hooks import _event_name_for_state as _event_name
+        from .a2a_spec.tasks import A2A_ERR_TASK_NOT_FOUND, is_terminal_state, build_error_response
 
         status = _ensure_task_queue().get_status(task_id)
         if status["state"] == "unknown":
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": A2A_ERR_TASK_NOT_FOUND, "message": f"Task not found: {task_id}"}},
-                404,
-            )
+            self._send_rpc_error(A2A_ERR_TASK_NOT_FOUND, f"Task not found: {task_id}", 404)
             return
 
         streamer = get_sse_streamer()
         stream_id = streamer.open_stream(task_id)
         current_state = status.get("state", "unknown")
 
+        import json
+        from .hooks import _event_name_for_state as _event_name
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.close_connection = True
         self.send_header("X-Stream-Id", stream_id)
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.send_header("Access-Control-Allow-Origin", self.server.cors_origins)
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", f"{http_method}, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, A2A-Version, A2A-Extensions")
         self.end_headers()
 
         def _send_line(line: str) -> bool:
@@ -1642,7 +1575,7 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             streamer.close_stream(stream_id)
             return
 
-        poll_interval = 0.5  # seconds — 5x fewer wakeups than 0.1s, still responsive
+        poll_interval = 0.5
         max_wait = float(os.getenv("A2A_SSE_TIMEOUT", "300"))
         deadline = time.time() + max_wait
 
@@ -1652,8 +1585,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                 if not _send_line(line):
                     streamer.close_stream(stream_id)
                     return
+
             if streamer.is_closed(stream_id):
                 return
+
             status = _ensure_task_queue().get_status(task_id)
             if is_terminal_state(status.get("state", "")):
                 term_state = status["state"]
@@ -1666,111 +1601,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
                     return
                 streamer.close_stream(stream_id)
                 return
+
             time.sleep(poll_interval)
 
         _send_line('event: error\ndata: {"code": -38000, "message": "SSE stream timed out"}\n\n')
         streamer.close_stream(stream_id)
-
-    def _rest_send_message(self, body: dict) -> None:
-        """F-B005: POST /message:send — send a message and return a task result."""
-        message = body.get("message", {})
-        text_parts = []
-        for part in message.get("parts", []):
-            if "text" in part:
-                text_parts.append(part.get("text", ""))
-        user_text = "\n".join(text_parts)
-
-        if not user_text.strip():
-            self._send_json({
-                "id": str(uuid.uuid4()),
-                "status": {"state": "failed"},
-                "artifacts": [{"parts": [{"text": "Empty message"}], "index": 0}],
-            })
-            return
-
-        user_text = sanitize_inbound(user_text)
-        metadata = message.get("metadata", {})
-        task_id = body.get("id") or str(uuid.uuid4())
-        context_id = body.get("contextId") or metadata.get("context_id") or task_id
-
-        if "sender_name" not in metadata:
-            from_field = body.get("from") or body.get("sender", {}).get("name")
-            metadata["sender_name"] = (
-                from_field or metadata.get("agent_name") or f"agent-{self.client_address[0]}"
-            )
-        raw_name = metadata.get("sender_name", "") or ""
-        metadata["sender_name"] = "".join(c for c in raw_name if c.isalnum() or c in "-_.@ ")[:64]
-        metadata["_a2a_origin"] = "peer"
-
-        audit.log("task_received", {"task_id": task_id, "length": len(user_text)})
-
-        q = _ensure_task_queue()
-
-        # Idempotency
-        from .persistence import get_idempotency_store
-        idem_store = get_idempotency_store()
-        idem_key = body.get("idempotencyKey")
-        if idem_key:
-            conflict, existing_task_id = idem_store.check_conflict(idem_key, body)
-            if conflict:
-                self._send_json(
-                    {
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -38004,
-                            "message": f"Non-idempotent task: idempotency key '{idem_key}' already used with a different payload",
-                            "data": {"existingTaskId": existing_task_id},
-                        }
-                    },
-                    409,
-                )
-                return
-            cached = idem_store.get(idem_key)
-            if cached is not None:
-                self._send_json(cached[1])
-                return
-
-        if q.find_task_by_id(task_id) is not None:
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -38004, "message": "Task ID already in use"}},
-                409,
-            )
-            return
-
-        task = q.enqueue(task_id, user_text, metadata, context_id=context_id)
-        if task is None:
-            self._send_json(
-                {"jsonrpc": "2.0", "error": {"code": -32603, "message": "Agent busy — too many pending tasks"}},
-                503,
-            )
-            return
-
-        _start_async_webhook_delivery(task_id)
-
-        task.ready.wait(timeout=_RESPONSE_TIMEOUT)
-
-        if task.response is None:
-            result = {
-                "id": task_id,
-                "status": {"state": "working"},
-                "artifacts": [{"parts": [{"text": "(processing — poll with tasks/get)"}], "index": 0}],
-            }
-            self._send_json(result, 200)
-            return
-
-        filtered = filter_outbound(task.response)
-        audit.log("task_completed", {"task_id": task_id, "response_length": len(filtered)})
-
-        result = {
-            "id": task_id,
-            "status": {"state": "completed"},
-            "artifacts": [{"parts": [{"text": filtered}], "index": 0}],
-        }
-
-        if idem_key:
-            idem_store.set(idem_key, task_id, body, result)
-
-        self._send_json(result, 200)
 
     def _rest_send_message_stream(self, body: dict) -> None:
         """F-B009: POST /message/stream — streaming response via SSE."""
