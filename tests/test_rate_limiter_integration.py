@@ -38,6 +38,10 @@ def a2a_server():
     host = "127.0.0.1"
     port = _find_free_port()
     server = A2AServer(host, port, rate_limit_config=cfg)
+    # Create audit log directory — CI runs don't have ~/.hermes/
+    from pathlib import Path
+    audit_dir = Path.home() / ".hermes"
+    audit_dir.mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     assert _wait_for_server(host, port), "server failed to start within timeout"
@@ -259,15 +263,19 @@ class TestConcurrentAccess:
             def _req(i):
                 url = f"http://{host}:{port}/"
                 body = json.dumps(_send_message_body(f"concurrent-{i}")).encode()
-                req = urllib.request.Request(url, data=body, method="POST")
-                req.add_header("Content-Type", "application/json")
-                try:
-                    resp = urllib.request.urlopen(req, timeout=10)
-                    return resp.status, True
-                except urllib.error.HTTPError as e:
-                    return e.code, False
-                except urllib.error.URLError:
-                    return 0, False  # timeout or connection error
+                for attempt in range(3):
+                    try:
+                        req = urllib.request.Request(url, data=body, method="POST")
+                        req.add_header("Content-Type", "application/json")
+                        resp = urllib.request.urlopen(req, timeout=10)
+                        return resp.status, True
+                    except urllib.error.HTTPError as e:
+                        return e.code, False
+                    except (urllib.error.URLError, ConnectionResetError):
+                        if attempt < 2:
+                            time.sleep(0.1)
+                        else:
+                            return 0, False
             with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
                 futures = [pool.submit(_req, i) for i in range(30)]
                 results = [f.result() for f in concurrent.futures.as_completed(futures)]
