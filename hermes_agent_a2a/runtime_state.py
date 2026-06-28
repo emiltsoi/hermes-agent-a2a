@@ -15,7 +15,8 @@ from threading import Lock
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from .server import A2AServer, TaskQueue
+    from .server import A2AServer
+    from .task_queue import TaskQueue
 
 _logger = logging.getLogger(__name__)
 
@@ -45,12 +46,6 @@ class A2AMetrics:
     def record_webhook_failure(self) -> None:
         with self._lock:
             self._webhook_failures += 1
-
-    def record_webhook_attempt_and_success(self) -> None:
-        """Atomically record both webhook attempt and success."""
-        with self._lock:
-            self._webhook_attempts += 1
-            self._webhook_successes += 1
 
     def record_webhook_result(self, success: bool) -> None:
         """Atomically record a webhook result (attempt + success or failure)."""
@@ -153,7 +148,7 @@ class A2ARuntimeState:
         """Get or create the task queue."""
         with self._state_lock:
             if self._task_queue is None:
-                from .server import TaskQueue
+                from .task_queue import TaskQueue
                 self._task_queue = TaskQueue()
             return self._task_queue
     

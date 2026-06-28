@@ -209,46 +209,79 @@ def _validate_webhook_reachable(webhook_url: str, timeout: int = 5) -> tuple[boo
 
 
 
-def _resolve_target(agent_name: str | None, url: str | None, 
-                    auth_token: str | None, auth_type: str | None,
-                    auth_header: str | None, auth_value: str | None,
-                    timeout: int, allow_loopback: bool = False
-                    ) -> tuple[str, dict, Exception | None]:
-    """Resolve an A2A target agent to URL and auth params.
-    
-    Returns (target_url, auth_kwargs, None) on success,
-            ("", {}, ValueError) on failure.
-    Common code extracted from handle_discover, handle_send_protocol_task,
-    and handle_cancel_protocol_task.
+def _resolve_rpc_target(name: str) -> tuple[dict | None, str, dict, bool, dict | None]:
+    """Resolve a fleet agent's a2a_rpc URL, auth, and loopback flag by name.
+
+    Returns ``(agent_info, target_url, resolved_auth, allow_loopback, error)``
+    where ``error`` is None on success or a ``{"error": ...}`` dict to return.
+    Consolidates the resolution block previously duplicated across
+    handle_send_protocol_task, handle_cancel_protocol_task, and _handle_call_mode3.
     """
-    from .identity import get_identity
-    from .persistence import load_identity_store
-    
-    if agent_name:
-        store = load_identity_store()
-        identity = get_identity(agent_name, store)
-        if identity is None:
-            return "", {}, ValueError(f"Agent '{agent_name}' not found in identity store")
-        target_url = identity.get("url", "")
-        auth_token_val = identity.get("auth_token", "")
-    elif url:
-        target_url = url
-        auth_token_val = auth_token or ""
-    else:
-        return "", {}, ValueError("Either agent name or URL is required")
-    
-    target_url = _validate_target_url(target_url, allow_loopback=allow_loopback)
-    
-    auth_kwargs = {}
-    if auth_token_val:
-        if auth_type and auth_type != "none":
-            auth_kwargs["auth_token"] = auth_token_val
-            if auth_type:
-                auth_kwargs["auth_type"] = auth_type
-        else:
-            auth_kwargs["auth_token"] = auth_token_val
-    
-    return target_url, auth_kwargs, None
+    agent_info = _resolve_agent_by_name(name)
+    if not agent_info:
+        return None, "", {}, False, {"error": f"Agent '{name}' not found in vault registry"}
+    a2a_rpc = _transport(agent_info, "a2a_rpc")
+    target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
+    resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
+    allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
+    if not target_url:
+        return agent_info, "", {}, False, {"error": f"Agent '{name}' has no a2a_url in vault"}
+    return agent_info, target_url, resolved_auth, allow_loopback, None
+
+
+def _run_worker_subprocess(task_id: str, agent_home: str, hermes_home: str,
+                           message: str, timeout: int):
+    """Spawn the ephemeral worker subprocess shared by Mode 2 and Mode 3.
+
+    Registers the worker, runs it with the given wall-clock ``timeout``, and
+    always unregisters + cleans up zombies in a finally block. On timeout the
+    process is killed and ``subprocess.TimeoutExpired`` is re-raised for the
+    caller to format. Returns ``(proc, stdout, stderr)`` on completion.
+    """
+    venv_python = os.environ.get(
+        "A2A_VENV_PYTHON",
+        os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"),
+    )
+    worker_script = str(Path(__file__).parent / "_mode2_worker.py")
+    plugin_dir = str(Path(__file__).parent)
+    params = {
+        "agent_home": agent_home,
+        "hermes_home": hermes_home,
+        "message": message,
+        "timeout": timeout,
+    }
+    env = {
+        "HERMES_HOME": hermes_home,
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            [venv_python, worker_script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            start_new_session=True,
+        )
+        register_worker(task_id, proc)
+        stdout, stderr = proc.communicate(input=json.dumps(params), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if proc:
+            proc.kill()
+            proc.wait()
+        raise
+    finally:
+        unregister_worker(task_id)
+        from .worker_registry import cleanup_zombie_processes
+        cleanup_zombie_processes()
+
+    return proc, stdout, stderr
+
+
 _DEFAULT_TIMEOUT = int(os.getenv("A2A_DEFAULT_TIMEOUT", "120"))
 _POLL_INTERVAL = int(os.getenv("A2A_POLL_INTERVAL", "5"))
 _POLL_MAX_ATTEMPTS = int(os.getenv("A2A_POLL_MAX_ATTEMPTS", "60"))
@@ -820,45 +853,10 @@ def _handle_call_mode2(
     if not os.path.isdir(agent_home):
         return {"error": f"Agent profile not found: {agent_home}"}
 
-    venv_python = os.environ.get("A2A_VENV_PYTHON", os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"))
-    worker_script = str(Path(__file__).parent / "_mode2_worker.py")
-    plugin_dir = str(Path(__file__).parent)
-    params = {
-        "agent_home": agent_home,
-        "hermes_home": hermes_home,
-        "message": message,
-        "timeout": timeout,
-    }
-    env = {
-        "HERMES_HOME": hermes_home,
-        "PATH": os.environ.get("PATH", ""),
-        "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
-    }
-
-    proc = None
     try:
-        proc = subprocess.Popen(
-            [venv_python, worker_script],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            start_new_session=True,
-        )
-        register_worker(task_id, proc)
-        stdout, stderr = proc.communicate(input=json.dumps(params), timeout=timeout)
+        proc, stdout, stderr = _run_worker_subprocess(task_id, agent_home, hermes_home, message, timeout)
     except subprocess.TimeoutExpired:
-        if proc:
-            proc.kill()
-            proc.wait()
         return {"error": f"Mode 2 worker timed out after {timeout}s"}
-    finally:
-        unregister_worker(task_id)
-        # Match Mode 3 (see line ~890): clean up any zombies that may have
-        # accumulated across the worker process boundary. (LOW-06)
-        from .worker_registry import cleanup_zombie_processes
-        cleanup_zombie_processes()
 
     if proc is None or proc.returncode != 0:
         err = stderr.strip() if proc else "process not started"
@@ -901,48 +899,15 @@ def _handle_task_send_mode3(params: dict, metadata: dict, user_text: str, contex
         raise ValueError("agent name not found in params.name, metadata.agent_name, or metadata.sender_name")
     agent_home = os.path.join(hermes_home, "profiles", name.lower())
 
-    venv_python = os.environ.get("A2A_VENV_PYTHON", os.path.join(hermes_home, "hermes-agent", "venv", "bin", "python"))
-    worker_script = str(Path(__file__).parent / "_mode2_worker.py")
-    plugin_dir = str(Path(__file__).parent)
-    worker_params = {
-        "agent_home": agent_home,
-        "hermes_home": hermes_home,
-        "message": user_text,
-        "timeout": timeout,
-    }
-    env = {
-        "HERMES_HOME": hermes_home,
-        "PATH": os.environ.get("PATH", ""),
-        "PYTHONPATH": plugin_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
-    }
-
-    proc = None
     try:
-        proc = subprocess.Popen(
-            [venv_python, worker_script],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            start_new_session=True,
-        )
-        register_worker(task_id, proc)
-        stdout, stderr = proc.communicate(input=json.dumps(worker_params), timeout=timeout)
+        proc, stdout, stderr = _run_worker_subprocess(task_id, agent_home, hermes_home, user_text, timeout)
     except subprocess.TimeoutExpired:
-        if proc:
-            proc.kill()
-            proc.wait()
         return {
             "id": task_id,
             "context_id": context_id or task_id,
             "status": {"state": "failed"},
             "artifacts": [{"parts": [{"text": f"Mode 3 worker timed out after {timeout}s"}], "index": 0}],
         }
-    finally:
-        unregister_worker(task_id)
-        from .worker_registry import cleanup_zombie_processes
-        cleanup_zombie_processes()
 
     if proc.returncode == 0:
         try:
@@ -987,14 +952,9 @@ def _handle_call_mode3(
     if not name:
         return {"error": "'name' is required for Mode 3 (URL not supported in Mode 3)"}
 
-    agent_info = _resolve_agent_by_name(name)
-    if not agent_info:
-        return {"error": f"Agent '{name}' not found in vault registry"}
-    a2a_rpc = _transport(agent_info, "a2a_rpc")
-    target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-    resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
-    if not target_url:
-        return {"error": f"Agent '{name}' has no a2a_url in vault"}
+    _agent_info, target_url, resolved_auth, _allow_loopback, err = _resolve_rpc_target(name)
+    if err:
+        return err
 
     try:
         target_url = _validate_target_url(target_url, allow_loopback=True)
@@ -1076,19 +1036,15 @@ def handle_send_protocol_task(
     resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
 
     if name:
-        agent_info = _resolve_agent_by_name(name)
-        if not agent_info:
-            return {"error": f"Agent '{name}' not found in vault registry"}
-        a2a_rpc = _transport(agent_info, "a2a_rpc")
-        target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-        resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
-        allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
+        agent_info, target_url, resolved_auth, allow_loopback, err = _resolve_rpc_target(name)
+        if agent_info is None:
+            return err  # agent not found
         if skill:
             valid_skill, available_skills = validate_skill(agent_info, skill)
             if not valid_skill:
                 return {"error": f"Skill '{skill}' not found for agent '{name}'", "available_skills": available_skills}
-        if not target_url:
-            return {"error": f"Agent '{name}' has no a2a_url in vault"}
+        if err:
+            return err  # agent has no a2a_url
     else:
         target_url = url
         allow_loopback = False
@@ -1239,15 +1195,9 @@ def handle_cancel_protocol_task(
 
     resolved_auth = _direct_auth(auth_token, auth_type, auth_header, auth_value)
     if name:
-        agent_info = _resolve_agent_by_name(name)
-        if not agent_info:
-            return {"error": f"Agent '{name}' not found in vault registry"}
-        a2a_rpc = _transport(agent_info, "a2a_rpc")
-        target_url = a2a_rpc.get("url", "") or agent_info.get("a2a_url", "")
-        resolved_auth = a2a_rpc.get("auth") or {"type": "bearer", "token": agent_info.get("auth_token", "")}
-        allow_loopback = bool(a2a_rpc.get("allow_loopback") or agent_info.get("allow_loopback"))
-        if not target_url:
-            return {"error": f"Agent '{name}' has no a2a_url in vault"}
+        _agent_info, target_url, resolved_auth, allow_loopback, err = _resolve_rpc_target(name)
+        if err:
+            return err
     else:
         target_url = url
         allow_loopback = False

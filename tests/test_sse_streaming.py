@@ -401,7 +401,9 @@ class TestSSEPollInterval:
         import inspect
         from hermes_agent_a2a.server import A2ARequestHandler
 
-        source = inspect.getsource(A2ARequestHandler._stream_task_sse)
+        # The SSE poll loop is shared by all streaming endpoints via
+        # _sse_poll_until_terminal (refactored out of _stream_task_sse).
+        source = inspect.getsource(A2ARequestHandler._sse_poll_until_terminal)
         # Verify poll_interval is set to 0.5, not 0.1
         assert "poll_interval = 0.5" in source, (
             "SSE stream must use poll_interval=0.5 to avoid blocking threads. "
