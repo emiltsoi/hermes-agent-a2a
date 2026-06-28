@@ -808,56 +808,52 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
         _send_line('event: error\ndata: {"code": -38000, "message": "SSE stream timed out"}\n\n')
         streamer.close_stream(stream_id)
 
+    # GET route table — order IS precedence (first match wins).
+    # Each entry: (predicate(path, segments), handler)
+    _GET_ROUTES: list[tuple] = []  # initialized in __init__ or class body
+
     def do_GET(self) -> None:
         path = self.path.split("?")[0]
 
+        # Auth guard for task/card endpoints
         if path.startswith(("/tasks", "/extendedAgentCard")):
             if self.server.require_auth and not self._check_auth():
-                self._send_json(
-                    {"jsonrpc": "2.0", "error": {"code": -32603, "message": "Unauthorized"}},
-                    401,
-                )
+                self._send_rpc_error(-32603, "Unauthorized", 401)
                 return
 
-        # F-B008: GET /tasks/{id}:subscribe  (SubscribeToTask — SSE) — must check before /tasks/{id}
-        if path.startswith("/tasks/") and ":subscribe" in path:
-            parts = path.split("/tasks/")[1].split(":subscribe")
-            if len(parts) == 2:
-                self._rest_subscribe_to_task(parts[0])
+        # Ordered route table — precedence matters.
+        # /tasks/{id}:subscribe must fire before /tasks/{id}
+        segments = path.split("/")
+        routes = [
+            # (predicate, handler, name)
+            (lambda p, s: p.startswith("/tasks/") and ":subscribe" in p,
+             lambda p, s: self._rest_subscribe_to_task(s[2].split(":subscribe")[0]),
+             "SubscribeToTask"),
+            (lambda p, s: len(s) == 5 and s[1] == "tasks" and s[3] == "pushNotificationConfigs",
+             lambda p, s: self._rest_get_push_config(s[2], s[4]),
+             "GetTaskPushNotificationConfig"),
+            (lambda p, s: len(s) == 4 and s[1] == "tasks" and s[3] == "pushNotificationConfigs",
+             lambda p, s: self._rest_list_push_configs(s[2]),
+             "ListTaskPushNotificationConfigs"),
+            (lambda p, s: p.startswith("/tasks/") and s[1] == "tasks" and len(s) == 3,
+             lambda p, s: self._rest_get_task(s[2]),
+             "GetTask"),
+            (lambda p, s: p == "/extendedAgentCard",
+             lambda p, s: self._rest_get_extended_agent_card(),
+             "ExtendedAgentCard"),
+            (lambda p, s: p == "/tasks",
+             lambda p, s: self._rest_list_tasks(),
+             "ListTasks"),
+        ]
+        for pred, handler, _name in routes:
+            try:
+                if pred(path, segments):
+                    handler(path, segments)
+                    return
+            except Exception:
+                logger.exception("GET route handler failed: %s", _name)
+                self._send_rpc_error(-32603, "Internal error", 500)
                 return
-
-        # F-B001: GET /tasks/{id}  (GetTask)
-        if path.startswith("/tasks/") and path.count("/") == 2:
-            task_id = path.split("/tasks/")[1]
-            self._rest_get_task(task_id)
-            return
-
-        # F-B010: GET /tasks/{id}/pushNotificationConfigs/{config_id}  (GetTaskPushNotificationConfig)
-        if "/pushNotificationConfigs/" in path:
-            # /tasks/{id}/pushNotificationConfigs/{config_id}  → 4 slashes, segments = ['', 'tasks', '{id}', 'pushNotificationConfigs', '{config_id}']
-            segments = path.split("/")
-            if len(segments) == 5 and segments[3] == "pushNotificationConfigs":
-                self._rest_get_push_config(segments[2], segments[4])
-                return
-
-        # F-B010: GET /tasks/{id}/pushNotificationConfigs  (ListTaskPushNotificationConfigs)
-        if "/pushNotificationConfigs" in path:
-            # /tasks/{id}/pushNotificationConfigs  → 3 slashes, segments = ['', 'tasks', '{id}', 'pushNotificationConfigs']
-            segments = path.split("/")
-            if len(segments) == 4 and segments[3] == "pushNotificationConfigs":
-                task_id = segments[2]
-                self._rest_list_push_configs(task_id)
-                return
-
-        # F-B011: GET /extendedAgentCard
-        if path == "/extendedAgentCard":
-            self._rest_get_extended_agent_card()
-            return
-
-        # F-B006: GET /tasks  (ListTasks)
-        if path == "/tasks":
-            self._rest_list_tasks()
-            return
 
         # Built-in endpoints
         if path == "/.well-known/agent.json":
