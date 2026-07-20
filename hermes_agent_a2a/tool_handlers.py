@@ -427,9 +427,6 @@ def _consume_rate_limit() -> bool:
         return True
 
 
-def _normalize_url(url: str) -> str:
-    return (url or "").strip().rstrip("/")
-
 
 # _validate_target_url is now an alias for security.validate_target_url.
 # Imported at module level above; old inline definition removed (SSRF consolidation).

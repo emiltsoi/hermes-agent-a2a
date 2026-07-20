@@ -209,7 +209,6 @@ class TestStateMachine:
         # These methods must exist on TaskQueue
         assert hasattr(q, "set_auth_required"), "TaskQueue needs set_auth_required()"
         assert hasattr(q, "set_authenticated"), "TaskQueue needs set_authenticated()"
-        assert hasattr(q, "set_rejected"), "TaskQueue needs set_rejected()"
         assert hasattr(q, "transition"), "TaskQueue needs transition() for state changes"
 
     def test_state_transition_auth_required_to_authenticated(self):

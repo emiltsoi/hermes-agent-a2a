@@ -106,14 +106,6 @@ def _start_async_webhook_delivery(task_id: str) -> None:
 
 
 
-def get_runtime_state_dict() -> dict:
-    """Expose the process-wide runtime state to the plugin loader as a dict.
-
-    Named explicitly as _dict to avoid shadowing runtime_state.get_runtime_state()
-    which returns the A2ARuntimeState singleton.
-    """
-    from .runtime_state import get_runtime_state as get_state
-    return get_state().to_dict()
 
 
 def set_runtime_server(server, thread) -> None:

@@ -81,10 +81,6 @@ class TaskQueue:
         # Oldest pending task created_at — used to skip watchdog scan when queue is young
         self._oldest_pending_time: Optional[float] = None
 
-    def _set_state(self, task_id: str, state: str) -> None:
-        """Set task state, creating it on first access."""
-        self._states[task_id] = state
-
     def set_auth_required(self, task_id: str, metadata: dict) -> None:
         """Place a task in auth_required state without queuing it."""
         with self._lock:
@@ -94,11 +90,6 @@ class TaskQueue:
         """Mark a task as authenticated (from auth_required)."""
         with self._lock:
             self._states[task_id] = "authenticated"
-
-    def set_rejected(self, task_id: str, metadata: dict) -> None:
-        """Mark a task as rejected."""
-        with self._lock:
-            self._states[task_id] = "rejected"
 
     def transition(self, task_id: str, to_state: str, return_error: bool = False) -> bool | tuple[bool, int | None]:
         """Attempt a state transition.

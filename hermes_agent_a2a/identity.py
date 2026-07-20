@@ -293,10 +293,6 @@ class VaultResolver:
             },
         }
 
-    def skip_vault_resolution(self) -> bool:
-        """True if vault: none is set — skip vault entirely."""
-        return self.config.get("a2a", {}).get("vault", "auto") == "none"
-
     def resolve_agent(self, name: str) -> Optional[dict]:
         return resolve_agent(name)
 

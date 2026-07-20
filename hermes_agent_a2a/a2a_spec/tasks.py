@@ -133,10 +133,6 @@ def is_terminal_state(state: str) -> bool:
     return str(state or "").lower() in TERMINAL_STATES
 
 
-def _utc_timestamp() -> str:
-    """Return current UTC time as ISO 8601 string."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
 
 # ---------------------------------------------------------------------------
 # Payload builders

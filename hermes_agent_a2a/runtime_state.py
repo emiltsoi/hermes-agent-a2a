@@ -152,11 +152,6 @@ class A2ARuntimeState:
                 self._task_queue = TaskQueue()
             return self._task_queue
     
-    def set_task_queue(self, queue: "TaskQueue") -> None:
-        """Set the task queue."""
-        with self._state_lock:
-            self._task_queue = queue
-    
     def get_server(self) -> Optional["A2AServer"]:
         """Get the A2A server instance."""
         with self._state_lock:
@@ -167,20 +162,10 @@ class A2ARuntimeState:
         with self._state_lock:
             self._server = server
     
-    def get_thread(self) -> Optional[object]:
-        """Get the server thread instance."""
-        with self._state_lock:
-            return self._thread
-    
     def set_thread(self, thread: Optional[object]) -> None:
         """Set the server thread instance."""
         with self._state_lock:
             self._thread = thread
-    
-    def get_owner_module(self) -> str:
-        """Get the owner module name."""
-        with self._state_lock:
-            return self._owner_module
     
     def set_owner_module(self, module: str) -> None:
         """Set the owner module name."""

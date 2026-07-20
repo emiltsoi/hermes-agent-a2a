@@ -82,20 +82,6 @@ class PushDelivery:
             hmac_key.encode(), body, hashlib.sha256
         ).hexdigest()
 
-    def _build_request(self, url: str, payload: dict, hmac_key: str) -> urllib.request.Request:
-        """Build a signed HTTP POST request for a push payload."""
-        body = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
-        sig = self._sign(payload, hmac_key)
-        return urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Hub-Signature-256": sig,
-            },
-            method="POST",
-        )
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -311,49 +297,6 @@ def deliver_push_notification(
         return False
 
 
-def deliver_artifact_push(
-    task_id: str,
-    config_id: str,
-    context_id: str,
-    artifact: dict,
-    metadata: Optional[dict] = None,
-    timeout: float = 10.0,
-) -> bool:
-    """Deliver a TaskArtifactUpdateEvent as a push notification.
-
-    Per a2a.proto:775-787, StreamResponse payload format:
-      oneof payload {
-        Task task = 1;
-        Message message = 2;
-        TaskStatusUpdateEvent status_update = 3;
-        TaskArtifactUpdateEvent artifact_update = 4;
-      }
-
-    We deliver the artifact_update discriminator directly.
-
-    Args:
-        task_id:    The task that generated the artifact.
-        config_id:  The push notification config ID for this subscription.
-        context_id: The context ID for this task.
-        artifact:   The A2A artifact dict.
-        metadata:   Optional event metadata.
-        timeout:    HTTP timeout in seconds.
-
-    Returns:
-        True on a 2xx response, False on any failure.
-    """
-    # Spec-compliant StreamResponse payload with artifact_update discriminator
-    payload = {
-        "artifact_update": {
-            "taskId": task_id,
-            "contextId": context_id,
-            "artifact": artifact,
-            "append": False,
-            "last_chunk": True,
-            "metadata": metadata or {},
-        }
-    }
-    return deliver_push_notification(task_id, config_id, payload, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
