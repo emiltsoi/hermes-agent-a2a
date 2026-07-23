@@ -1348,7 +1348,8 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     # Do NOT assume the resolved agent card URL and the webhook URL share the same host.
     if target_webhook_url:
         try:
-            target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=_is_local_fleet_agent(agent))
+            allow_loopback = _is_local_fleet_agent(agent) or (raw_info or {}).get("allow_loopback", False)
+            target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=allow_loopback)
         except ValueError as e:
             return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
     import hashlib
