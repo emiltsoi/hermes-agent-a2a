@@ -324,48 +324,6 @@ A2A_ANNOUNCE = {
     },
 }
 
-A2A_TELEGRAM = {
-    "name": "a2a_send_session_message",
-    "description": (
-        "Send a one-way message through a target Hermes gateway into its configured platform session context. "
-        "The target gateway owns session routing via config.yaml. "
-        "Returns delivery/relay status only; it does not wait for or guarantee the recipient's semantic reply. "
-        "Also echoes the same message to the sender's own Telegram DM for visibility when configured. "
-        "Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][action:<action>][reply:<reply>] header. "
-        "Caller passes raw message; tool handles mesh metadata."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "message": {
-                "type": "string",
-                "description": "The one-way message body to send into the target agent's configured session (header is auto-padded)",
-            },
-            "agent": {
-                "type": "string",
-                "description": "Name of the target Hermes mesh peer (e.g. daji, yoyo, jessie, agent0)",
-            },
-            "action": {
-                "type": "string",
-                "enum": ["do", "info"],
-                "description": "Action type: do (recipient should take action) | info (information only, log or acknowledge)",
-                "default": "do",
-            },
-            "reply": {
-                "type": "string",
-                "enum": ["yes", "no"],
-                "description": "Reply expectation: yes (sender expects reply) | no (fire-and-forget)",
-                "default": "yes",
-            },
-            "ref": {
-                "type": "string",
-                "description": "Optional message ID being replied to (for threading)",
-            },
-        },
-        "required": ["message", "agent"],
-    },
-}
-
 A2A_GET_METRICS = {
     "name": "a2a_get_metrics",
     "description": (

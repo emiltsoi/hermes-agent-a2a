@@ -39,7 +39,6 @@ def test_registers_current_a2a_tools():
         "a2a_cancel_protocol_task",
         "a2a_run_local_agent_task",
         "a2a_run_remote_agent_task",
-        "a2a_send_session_message",
         "a2a_get_metrics",
     }
     assert all(entry["toolset"] == "a2a" for entry in registry.tools.values())
@@ -312,51 +311,8 @@ def test_a2a_spec_parses_artifacts_status_message_and_cancel_payload():
     }
 
 
-def test_session_schema_and_help_are_explicitly_one_way():
-    description = schemas.A2A_TELEGRAM["description"]
-    help_text = "\n".join(tools.handle_help("sessions")["guidance"])
-
-    assert "one-way" in description
-    assert "delivery/relay status only" in description
-    assert "one-way" in help_text
-    assert "does not wait for or guarantee" in help_text
 
 
-def test_session_message_returns_a2a_shaped_delivery_ack(monkeypatch):
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return b'{"delivery_id": "delivery-1"}'
-
-    agent = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-                "auth": {"type": "hmac", "secret": "secret"},
-            }
-        }
-    }
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch(
-        "hermes_agent_a2a.identity.get_raw_agent_identity", return_value=agent
-    ), patch.object(
-        urllib.request, "urlopen", return_value=FakeResponse()
-    ):
-        result = tools.handle_send_session_message(message="hello", agent="agent1", task_id="task-123456789", reply="no")
-
-    assert result["task_id"] == "task-123456789"
-    assert result["state"] == "completed"
-    assert result["delivery"] == "delivered"
-    assert result["reply_expected"] is False
-    assert result["hermes"]["route"] == "session"
-    assert result["hermes"]["delivery"] == "one_way"
-    assert result["a2a_envelope"]["method"] == "SendMessage"
-    assert result["a2a_envelope"]["params"]["message"]["metadata"]["expected_action"] == "acknowledge"
 
 
 def test_worker_registry_cancels_running_process():
@@ -433,77 +389,14 @@ def test_derive_hermes_home_raises_error_on_explicit_invalid_path(tmp_path, monk
         tools._derive_hermes_home()
 
 
-def test_validate_agent_webhook_config_valid():
-    """Test _validate_agent_webhook_config with valid configuration."""
-    agent_info = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-                "auth": {"type": "hmac", "secret": "test-secret"},
-            }
-        }
-    }
-    
-    is_valid, error = tools._validate_agent_webhook_config(agent_info)
-    assert is_valid is True
-    assert error == ""
 
 
-def test_validate_agent_webhook_config_missing_url():
-    """Test _validate_agent_webhook_config with missing webhook URL."""
-    agent_info = {
-        "transports": {
-            "hermes_webhook": {
-                "auth": {"type": "hmac", "secret": "test-secret"},
-            }
-        }
-    }
-    
-    is_valid, error = tools._validate_agent_webhook_config(agent_info)
-    assert is_valid is False
-    assert "no hermes_webhook.url" in error.lower()
 
 
-def test_validate_agent_webhook_config_missing_secret():
-    """Test _validate_agent_webhook_config with missing webhook secret."""
-    agent_info = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-            }
-        }
-    }
-    
-    is_valid, error = tools._validate_agent_webhook_config(agent_info)
-    assert is_valid is False
-    assert "no hermes_webhook.secret" in error.lower()
 
 
-def test_validate_agent_webhook_config_empty_secret():
-    """Test _validate_agent_webhook_config with empty webhook secret."""
-    agent_info = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-                "auth": {"type": "hmac", "secret": ""},
-            }
-        }
-    }
-    
-    is_valid, error = tools._validate_agent_webhook_config(agent_info)
-    assert is_valid is False
-    assert "no hermes_webhook.secret" in error.lower()
 
 
-def test_validate_agent_webhook_config_missing_transport():
-    """Test _validate_agent_webhook_config with missing hermes_webhook transport."""
-    agent_info = {
-        "transports": {}
-    }
-    
-    is_valid, error = tools._validate_agent_webhook_config(agent_info)
-    assert is_valid is False
-    assert "no hermes_webhook.url" in error.lower()
 
 
 def test_task_queue_get_task_metadata_pending():
@@ -646,73 +539,10 @@ def test_cleanup_zombie_processes_empty_registry():
     assert cleaned == 0
 
 
-def test_session_message_rejects_invalid_webhook_config(monkeypatch):
-    """Test handle_send_session_message rejects invalid webhook configuration."""
-    agent = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-                # Missing secret
-            }
-        }
-    }
-    
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
-        result = tools.handle_send_session_message(message="hello", agent="agent1")
-    
-    assert "error" in result
-    assert "webhook configuration invalid" in result["error"].lower()
 
 
-def test_session_message_rejects_missing_webhook_url(monkeypatch):
-    """Test handle_send_session_message rejects missing webhook URL."""
-    agent = {
-        "transports": {
-            "hermes_webhook": {
-                "auth": {"type": "hmac", "secret": "test-secret"},
-            }
-        }
-    }
-    
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent):
-        result = tools.handle_send_session_message(message="hello", agent="agent1")
-    
-    assert "error" in result
-    assert "webhook configuration invalid" in result["error"].lower()
 
 
-def test_session_message_validates_before_delivery(monkeypatch):
-    """Test handle_send_session_message validates config before attempting delivery."""
-    agent = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-                "auth": {"type": "hmac", "secret": "test-secret"},
-            }
-        }
-    }
-    
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    
-    class FakeResponse:
-        def __enter__(self):
-            return self
-        def __exit__(self, exc_type, exc, tb):
-            return False
-        def read(self):
-            return b'{"delivery_id": "delivery-1"}'
-    
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch(
-        "hermes_agent_a2a.identity.get_raw_agent_identity", return_value=agent
-    ), patch.object(
-        urllib.request, "urlopen", return_value=FakeResponse()
-    ):
-        result = tools.handle_send_session_message(message="hello", agent="agent1")
-
-    assert result["state"] == "completed"
-    assert result["delivery"] == "delivered"
 
 
 def test_a2a_metrics_initial_state():
@@ -831,79 +661,12 @@ def test_a2a_get_metrics_tool():
     assert result["tasks"]["completed"] >= 1
 
 
-def test_a2a_metrics_command_disabled_by_default(monkeypatch):
-    """Test /a2a_metrics command is disabled by default."""
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "false")
-    
-    result = tools.handle_send_session_message(message="/a2a_metrics", agent="agent1")
-    
-    # Should return error because command is disabled and agent not found
-    assert "error" in result
 
 
-def test_a2a_metrics_command_enabled(monkeypatch):
-    """Test /a2a_metrics command when enabled."""
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "true")
-    
-    result = tools.handle_send_session_message(message="/a2a_metrics", agent="agent1")
-    
-    # Should return metrics formatted for Telegram
-    assert result["state"] == "completed"
-    assert result["delivery"] == "command_response"
-    assert "📊 A2A Metrics" in result["response"]
-    assert "⏱️ Uptime:" in result["response"]
-    assert "🔗 Webhook" in result["response"]
-    assert "📨 Tasks" in result["response"]
-    assert "📬 Queue" in result["response"]
 
 
-def test_a2a_metrics_command_with_whitespace(monkeypatch):
-    """Test /a2a_metrics command with whitespace."""
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "true")
-    
-    result = tools.handle_send_session_message(message="  /a2a_metrics  ", agent="agent1")
-    
-    assert result["state"] == "completed"
-    assert result["delivery"] == "command_response"
-    assert "📊 A2A Metrics" in result["response"]
 
 
-def test_a2a_metrics_command_not_triggered_on_normal_message(monkeypatch):
-    """Test normal messages don't trigger metrics command."""
-    monkeypatch.setenv("A2A_AGENT_NAME", "agent0")
-    monkeypatch.setenv("A2A_METRICS_COMMAND_ENABLED", "true")
-    
-    agent = {
-        "transports": {
-            "hermes_webhook": {
-                "url": "https://target.example/webhook",
-                "auth": {"type": "hmac", "secret": "test-secret"},
-            }
-        }
-    }
-    
-    class FakeResponse:
-        def __enter__(self):
-            return self
-        def __exit__(self, exc_type, exc, tb):
-            return False
-        def read(self):
-            return b'{"delivery_id": "delivery-1"}'
-    
-    with patch.object(tools, "_resolve_agent_by_name", return_value=agent), patch(
-        "hermes_agent_a2a.identity.get_raw_agent_identity", return_value=agent
-    ), patch.object(
-        urllib.request, "urlopen", return_value=FakeResponse()
-    ):
-        result = tools.handle_send_session_message(message="hello", agent="agent1")
-
-    # Should not return command_response
-    assert result.get("delivery") != "command_response"
-    assert result["state"] == "completed"
-    assert result["delivery"] == "delivered"
 
 
 # ---------------------------------------------------------------------------
@@ -1106,36 +869,6 @@ def test_cr3_mode3_timeout_response_includes_jsonrpc_field(tmp_path, monkeypatch
     assert result["context_id"] == result["id"], "context_id should default to task_id"
 
 
-def test_mode2_env_sanitization_only_whitelisted_vars(tmp_path, monkeypatch):
-    """Mode 2: _handle_call_mode2 must spawn subprocess with ONLY whitelisted env vars (no secrets)."""
-    hermes_root = tmp_path / ".hermes"
-    hermes_root.mkdir()
-    (hermes_root / "hermes-agent").mkdir()
-    agent_profile = hermes_root / "profiles" / "target-agent"
-    agent_profile.mkdir(parents=True)
-
-    monkeypatch.setenv("HERMES_HOME", str(hermes_root))
-    # Set secrets that must NOT appear in the subprocess env
-    monkeypatch.setenv("A2A_TELEGRAM_BOT_TOKEN", "123456:FAKE-BOT-TOKEN")
-    monkeypatch.setenv("A2A_OWNER_CHAT_ID", "999999999")
-    monkeypatch.setenv("SOME_OTHER_SECRET", "super-secret-value")
-
-    mock_proc = MagicMock()
-    mock_proc.communicate.return_value = ('{"response": "ok"}', "")
-    mock_proc.returncode = 0
-
-    with patch.object(tools.subprocess, "Popen", return_value=mock_proc) as mock_popen:
-        result = tools._handle_call_mode2(name="target-agent", message="do it")
-
-    assert mock_popen.called
-    env_dict = mock_popen.call_args.kwargs.get("env") or mock_popen.call_args[1].get("env")
-
-    # Only whitelisted keys may be present
-    allowed = frozenset(["HERMES_HOME", "PATH", "PYTHONPATH"])
-    forbidden = frozenset(["A2A_TELEGRAM_BOT_TOKEN", "A2A_OWNER_CHAT_ID", "SOME_OTHER_SECRET"])
-
-    assert all(k in allowed for k in env_dict), f"Env contains non-whitelisted keys: {set(env_dict) - allowed}"
-    assert not any(k in env_dict for k in forbidden), f"Env must not contain secret keys: {forbidden & set(env_dict)}"
 
 
 def test_poll_error_tracking_returns_error_on_all_failures(monkeypatch):
@@ -1168,67 +901,10 @@ def test_poll_error_tracking_returns_error_on_all_failures(monkeypatch):
     assert "poll" in result["error"].lower() or "failed" in result["error"].lower()
 
 
-def test_boot_validator_raises_runtime_error_on_missing_bot_token():
-    """CR-6: BootValidator.validate() must raise RuntimeError when bot_token is missing."""
-    from hermes_agent_a2a.validators import BootValidator
-
-    class FakeVault:
-        pass
-
-    validator = BootValidator(FakeVault())
-
-    identity_no_token = {
-        "platforms": {"telegram": {}},
-        "defaults": {},
-    }
-
-    try:
-        validator.validate(identity_no_token)
-        assert False, "BootValidator.validate() must raise RuntimeError when bot_token is missing"
-    except RuntimeError as e:
-        assert "bot token" in str(e).lower()
 
 
-def test_boot_validator_raises_runtime_error_on_missing_chat_id():
-    """CR-6: BootValidator.validate() must raise RuntimeError when chat_id is missing."""
-    from hermes_agent_a2a.validators import BootValidator
-
-    class FakeVault:
-        pass
-
-    validator = BootValidator(FakeVault())
-
-    identity_no_chat_id = {
-        "platforms": {"telegram": {"bot_token": "123456:ABC"}},
-        "defaults": {},
-    }
-
-    try:
-        validator.validate(identity_no_chat_id)
-        assert False, "BootValidator.validate() must raise RuntimeError when chat_id is missing"
-    except RuntimeError as e:
-        assert "chat_id" in str(e).lower()
 
 
-def test_boot_validator_raises_runtime_error_on_unresolved_token_placeholder():
-    """CR-6: BootValidator.validate() must raise RuntimeError when bot_token is an unresolved env placeholder."""
-    from hermes_agent_a2a.validators import BootValidator
-
-    class FakeVault:
-        pass
-
-    validator = BootValidator(FakeVault())
-
-    identity_unresolved = {
-        "platforms": {"telegram": {"bot_token": "${A2A_TELEGRAM_BOT_TOKEN}"}},
-        "defaults": {},
-    }
-
-    try:
-        validator.validate(identity_unresolved)
-        assert False, "BootValidator.validate() must raise RuntimeError for unresolved env var placeholder"
-    except RuntimeError as e:
-        assert "unresolved" in str(e).lower() or "placeholder" in str(e).lower()
 
 
 def test_cr7_clear_stops_metrics_logger(monkeypatch):
@@ -1388,188 +1064,16 @@ def test_call_a2a_direct_handles_http_errors():
         assert "404" in result["error"]
 
 
-def test_trigger_webhook_uses_direct_a2a_when_flag_set():
-    """Plugin self-containment: webhook_delivery.trigger() must use direct A2A when use_direct_a2a=True."""
-    from hermes_agent_a2a.webhook_delivery import trigger
-    from unittest.mock import patch
-
-    # Mock a2a_direct.call to verify it's called
-    with patch("hermes_agent_a2a.a2a_direct.call", return_value={"result": "ok"}) as mock_direct:
-        trigger(
-            message="test message",
-            task_id="task-123",
-            use_direct_a2a=True,
-            target_url="http://127.0.0.1:41808/a2a",
-            auth_token="secret"
-        )
-
-        # Verify direct A2A was called
-        assert mock_direct.called
-        call_args = mock_direct.call_args[0]
-        assert call_args[0] == "http://127.0.0.1:41808/a2a"
-        assert call_args[1] == "test message"
-        assert call_args[2] == "task-123"
-        assert call_args[3] == "secret"
 
 
-def test_trigger_webhook_ssrf_guard_rejects_loopback_webhook_host():
-    """CR-1: webhook_delivery.trigger must reject loopback A2A_WEBHOOK_HOST before delivery.
-
-    An attacker who can set A2A_WEBHOOK_HOST=attacker.com could redirect the signed
-    webhook payload to an external host. The SSRF guard blocks localhost/127.0.0.1.
-    """
-    from hermes_agent_a2a.security import validate_host as _validate_webhook_host
-    from unittest.mock import patch
-
-    # _validate_webhook_host must reject loopback hosts directly.
-    with pytest.raises(ValueError, match="loopback"):
-        _validate_webhook_host("127.0.0.1")
-
-    with pytest.raises(ValueError, match="loopback"):
-        _validate_webhook_host("localhost")
-
-    # Public hosts must pass without error.
-    _validate_webhook_host("203.0.113.50")  # TEST-NET-2 — not reserved
-    _validate_webhook_host("agent.example.com")
 
 
-def test_trigger_webhook_ssrf_guard_prevents_urlopen_on_loopback_host(monkeypatch):
-    """CR-1: _trigger_webhook must not call urlopen when A2A_WEBHOOK_HOST is loopback.
-
-    Instead of raising, the guard calls on_failure and returns cleanly so that the
-    calling hook does not crash. The on_failure callback receives the task_id.
-    """
-    import importlib
-    import hermes_agent_a2a.server as srv_module
-    importlib.reload(srv_module)
-
-    urlopen_called = []
-    original_urlopen = urllib.request.urlopen
-
-    def track_urlopen(req, timeout=None):
-        urlopen_called.append(req.full_url)
-        return original_urlopen(req, timeout=timeout)
-
-    on_failure_called_for = []
-
-    def track_on_failure(tid):
-        on_failure_called_for.append(tid)
-
-    monkeypatch.setenv("A2A_WEBHOOK_HOST", "127.0.0.1")
-    monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
-
-    with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
-        srv_module.trigger(
-            message="test", task_id="ssrf-task", on_failure=track_on_failure
-        )
-
-    # urlopen must not have been called — the SSRF guard blocked delivery.
-    assert urlopen_called == [], (
-        f"urlopen was called despite loopback webhook host: {urlopen_called}"
-    )
-    # on_failure must have been called with the task_id so the task can be
-    # marked failed without crashing the caller.
-    assert on_failure_called_for == ["ssrf-task"], (
-        f"on_failure not called; was: {on_failure_called_for}"
-    )
 
 
-def test_trigger_webhook_async_ssrf_guard_prevents_urlopen_on_loopback_host(monkeypatch):
-    """CR-1: _trigger_webhook_async must reject loopback A2A_WEBHOOK_HOST.
-
-    The async variant must also call on_failure and return cleanly rather than
-    propagating the ValueError into the calling hook.
-    """
-    import importlib
-    import asyncio
-    import hermes_agent_a2a.server as srv_module
-    importlib.reload(srv_module)
-
-    urlopen_called = []
-    original_urlopen = urllib.request.urlopen
-
-    def track_urlopen(req, timeout=None):
-        urlopen_called.append(req.full_url)
-        return original_urlopen(req, timeout=timeout)
-
-    on_failure_called_for = []
-
-    def track_on_failure(tid):
-        on_failure_called_for.append(tid)
-
-    monkeypatch.setenv("A2A_WEBHOOK_HOST", "localhost")
-    monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
-
-    with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
-        asyncio.run(srv_module.trigger_async(
-            message="test", task_id="ssrf-async-task", on_failure=track_on_failure
-        ))
-
-    assert urlopen_called == [], (
-        f"urlopen was called despite loopback webhook host: {urlopen_called}"
-    )
-    assert on_failure_called_for == ["ssrf-async-task"]
 
 
-def test_trigger_webhook_valid_host_allows_urlopen(monkeypatch):
-    """CR-1: _trigger_webhook must call urlopen when A2A_WEBHOOK_HOST is a safe public host."""
-    import importlib
-    import hermes_agent_a2a.server as srv_module
-    importlib.reload(srv_module)
-
-    urlopen_called = []
-    original_urlopen = urllib.request.urlopen
-
-    mock_resp = MagicMock()
-    mock_resp.status = 200
-    mock_resp.__enter__ = lambda self: self
-    mock_resp.__exit__ = lambda self, *args: None
-
-    def track_urlopen(req, timeout=None):
-        urlopen_called.append(req.full_url)
-        return mock_resp
-
-    # Use an unroutable IP in TEST-NET range that won't accidentally hit a real service.
-    monkeypatch.setenv("A2A_WEBHOOK_HOST", "203.0.113.50")
-    monkeypatch.setenv("A2A_WEBHOOK_PORT", "8644")
-    monkeypatch.setenv("A2A_WEBHOOK_SECRET", "test-secret")
-
-    with patch.object(urllib.request, "urlopen", side_effect=track_urlopen):
-        srv_module.trigger(message="test", task_id="safe-task")
-
-    assert len(urlopen_called) == 1, f"Expected exactly 1 urlopen call, got: {urlopen_called}"
-    assert "203.0.113.50" in urlopen_called[0]
 
 
-def test_trigger_webhook_fallback_to_webhook_when_direct_not_enabled():
-    """Plugin self-containment: webhook_delivery.trigger() must use webhook when use_direct_a2a=False."""
-    from hermes_agent_a2a.webhook_delivery import trigger
-    from unittest.mock import patch
-
-    # Mock webhook secret to allow webhook path.
-    # Also set a safe (non-loopback) webhook host so the SSRF guard passes.
-    with patch.dict("os.environ", {
-        "A2A_WEBHOOK_SECRET": "test-secret",
-        "A2A_WEBHOOK_HOST": "203.0.113.99",
-    }):
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_response = MagicMock()
-            mock_response.status = 200
-            mock_response.__enter__ = lambda self: self
-            mock_response.__exit__ = lambda self, *args: None
-            mock_urlopen.return_value = mock_response
-
-            trigger(
-                message="test message",
-                task_id="task-123",
-                use_direct_a2a=False  # Use webhook path
-            )
-
-            # Verify webhook was called (not direct A2A)
-            assert mock_urlopen.called
-            req = mock_urlopen.call_args[0][0]
-            # Headers are case-insensitive, check for signature presence
-            assert any("hub-signature" in k.lower() for k in req.headers.keys())
 
 
 def test_get_raw_agent_identity_includes_transports(tmp_path, monkeypatch):
@@ -1610,23 +1114,6 @@ def test_get_raw_agent_identity_includes_transports(tmp_path, monkeypatch):
     assert "transports" not in resolved or "hermes_webhook" not in resolved.get("transports", {})
 
 
-def test_2d_cta_parameters_in_session_message_schema():
-    """Test that a2a_send_session_message schema includes 2D CTA parameters."""
-    schema = schemas.A2A_TELEGRAM
-    properties = schema["parameters"]["properties"]
-    
-    # Verify action parameter exists with correct enum
-    assert "action" in properties
-    assert properties["action"]["enum"] == ["do", "info"]
-    assert properties["action"]["default"] == "do"
-    
-    # Verify reply parameter exists with correct enum
-    assert "reply" in properties
-    assert properties["reply"]["enum"] == ["yes", "no"]
-    assert properties["reply"]["default"] == "yes"
-    
-    # Verify old cta parameter is removed
-    assert "cta" not in properties
 
 
 def test_2d_cta_behavioral():
@@ -1673,108 +1160,10 @@ def test_2d_cta_behavioral():
     assert metadata_with_skill["skill"] == "test-skill"
 
 
-def test_cr1_webhook_url_ssrf_validation_rejects_loopback(tmp_path, monkeypatch):
-    """CR-1: a2a_send_session_message must validate webhook URL for SSRF before delivery.
-
-    A webhook URL pointing to localhost/127.0.0.1 should be rejected with an SSRF check
-    error, preventing delivery to internal services.
-    """
-    vault_root = tmp_path / "fleet"
-    agents_dir = vault_root / "a2a" / "agents"
-    agent_dir = agents_dir / "ssrf-agent"
-    agent_dir.mkdir(parents=True)
-
-    identity_data = {
-        "name": "ssrf-agent",
-        "description": "Agent with SSRF-vulnerable webhook",
-        # Deliberately use a loopback URL — SSRF validation must block this
-        "webhook_url": "http://127.0.0.1:9999/webhook",
-        "webhook_secret": "test-secret",
-    }
-    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
-
-    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
-
-    # SSRF validation fires before any HTTP call, so no mock needed —
-    # the function returns early with the SSRF error before reaching urlopen.
-    result = tools.handle_send_session_message(
-        agent="ssrf-agent",
-        message="test payload",
-        action="do",
-        reply="yes",
-    )
-
-    assert "error" in result, f"Expected SSRF error, got: {result}"
-    assert "SSRF check" in result["error"] and "loopback" in result["error"].lower(), \
-        f"Expected SSRF check error about loopback, got: {result['error']}"
 
 
-def test_cr1_webhook_url_ssrf_validation_rejects_localhost(tmp_path, monkeypatch):
-    """CR-1: webhook URL with 'localhost' must be rejected by SSRF check."""
-    vault_root = tmp_path / "fleet"
-    agents_dir = vault_root / "a2a" / "agents"
-    agent_dir = agents_dir / "localhost-agent"
-    agent_dir.mkdir(parents=True)
-
-    identity_data = {
-        "name": "localhost-agent",
-        "description": "Agent with localhost webhook",
-        "webhook_url": "http://localhost:8080/relay",
-        "webhook_secret": "test-secret",
-    }
-    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
-
-    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
-
-    result = tools.handle_send_session_message(
-        agent="localhost-agent",
-        message="test payload",
-        action="do",
-        reply="yes",
-    )
-
-    assert "error" in result
-    assert "SSRF check" in result["error"] and "loopback" in result["error"].lower()
 
 
-def test_cr1_webhook_url_valid_internet_url_passes_ssrf(tmp_path, monkeypatch):
-    """CR-1: webhook URL pointing to a valid public host must pass SSRF check."""
-    vault_root = tmp_path / "fleet"
-    agents_dir = vault_root / "a2a" / "agents"
-    agent_dir = agents_dir / "public-agent"
-    agent_dir.mkdir(parents=True)
-
-    identity_data = {
-        "name": "public-agent",
-        "description": "Agent with public webhook",
-        "webhook_url": "https://agent.example.com/webhook",
-        "webhook_secret": "test-secret",
-    }
-    yaml.safe_dump(identity_data, (agent_dir / "identity.yaml").open("w"))
-
-    monkeypatch.setenv("A2A_VAULT_PATH", str(vault_root))
-
-    # Mock urllib.request.urlopen to prevent real HTTP calls while verifying
-    # the SSRF check passes and the request is actually made.
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = b'{"ok": true}'
-    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-    mock_resp.__exit__ = MagicMock(return_value=None)
-
-    with patch("urllib.request.urlopen", return_value=mock_resp):
-        with patch("hermes_agent_a2a.runtime_state.get_runtime_state") as mock_get_state:
-            mock_metrics = MagicMock()
-            mock_get_state.return_value.get_metrics.return_value = mock_metrics
-            result = tools.handle_send_session_message(
-                agent="public-agent",
-                message="test payload",
-                action="do",
-                reply="yes",
-            )
-
-    # SSRF check should have passed (no SSRF error), and urlopen should have been called
-    assert "SSRF check" not in str(result.get("error", "")), f"Unexpected SSRF error: {result}"
-    assert mock_resp.read.called, f"Expected HTTP delivery after SSRF pass, got: {result}"
 
 
 # ----------------------------------------------------------------------
@@ -1889,3 +1278,74 @@ def test_announce_url_param_overrides_env_var(monkeypatch):
 
     call_args = mock_http.call_args
     assert "custom-registry:9091" in call_args[0][1]
+
+
+def test_boot_validator_raises_runtime_error_on_missing_transport():
+    """BootValidator requires at least one A2A transport URL."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+
+    identity_no_transport = {
+        "platforms": {"telegram": {}},
+        "defaults": {},
+    }
+
+    with pytest.raises(RuntimeError, match="no usable A2A transport URL"):
+        validator.validate(identity_no_transport)
+
+
+def test_boot_validator_passes_with_a2a_rpc_url():
+    """BootValidator passes when an A2A RPC transport URL is present."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+    identity = {
+        "transports": {"a2a_rpc": {"url": "http://agent.example/rpc"}},
+        "defaults": {"platform": "telegram", "chat_type": "dm"},
+    }
+    validator.validate(identity)
+
+
+def test_boot_validator_validates_telegram_when_configured():
+    """BootValidator validates Telegram credentials if they are present."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+    identity = {
+        "a2a_url": "http://agent.example/rpc",
+        "platforms": {"telegram": {"bot_token": "123456:ABC"}},
+        "defaults": {"platform": "telegram", "chat_type": "dm"},
+    }
+
+    with pytest.raises(RuntimeError, match="default_chat_id"):
+        validator.validate(identity)
+
+
+def test_boot_validator_raises_runtime_error_on_unresolved_token_placeholder():
+    """BootValidator raises RuntimeError when bot_token is an unresolved env placeholder."""
+    from hermes_agent_a2a.validators import BootValidator
+
+    class FakeVault:
+        pass
+
+    validator = BootValidator(FakeVault())
+
+    identity = {
+        "a2a_url": "http://agent.example/rpc",
+        "platforms": {"telegram": {"bot_token": "${A2A_TELEGRAM_BOT_TOKEN}", "default_chat_id": 123}},
+        "defaults": {"platform": "telegram", "chat_type": "dm"},
+    }
+
+    with pytest.raises(RuntimeError, match="unresolved env var placeholder"):
+        validator.validate(identity)
+

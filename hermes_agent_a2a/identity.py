@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 ENV_BOT_TOKEN = "A2A_TELEGRAM_BOT_TOKEN"
 ENV_OWNER_CHAT_ID = "A2A_OWNER_CHAT_ID"
+ENV_A2A_URL = "A2A_URL"
+ENV_A2A_RPC_URL = "A2A_RPC_URL"
+ENV_A2A_WEBHOOK_URL = "A2A_WEBHOOK_URL"
+ENV_A2A_WEBHOOK_SECRET = "A2A_WEBHOOK_SECRET"
 
 
 def _resolve_env(value: str) -> Optional[str]:
@@ -234,9 +238,11 @@ class VaultResolver:
             return vault
 
         raise RuntimeError(
-            f"A2A vault error: no valid identity found. "
-            f"Set {ENV_BOT_TOKEN} and {ENV_OWNER_CHAT_ID} env vars, "
-            "configure a vault file, or add bot_token to config.yaml."
+            "A2A vault error: no valid identity found. "
+            "Configure a vault file (fleet/a2a/agents/<agent>/identity.yaml), "
+            f"set {ENV_A2A_RPC_URL}/{ENV_A2A_URL} env vars for A2A RPC, "
+            f"set {ENV_A2A_WEBHOOK_URL} for Hermes webhook, "
+            f"or set {ENV_BOT_TOKEN} for Telegram."
         )
 
     def _load_vault(self, base_path: Path) -> Optional[dict]:
@@ -256,20 +262,40 @@ class VaultResolver:
         """Read identity directly from environment variables (deployment override)."""
         token = os.environ.get(ENV_BOT_TOKEN)
         chat_id = os.environ.get(ENV_OWNER_CHAT_ID)
-        if not token:
+
+        a2a_url = os.environ.get(ENV_A2A_RPC_URL) or os.environ.get(ENV_A2A_URL)
+        webhook_url = os.environ.get(ENV_A2A_WEBHOOK_URL)
+        webhook_secret = os.environ.get(ENV_A2A_WEBHOOK_SECRET)
+
+        transports: dict = {}
+        if a2a_url:
+            transports["a2a_rpc"] = {"url": a2a_url, "protocol": "google-a2a"}
+        if webhook_url:
+            transports["hermes_webhook"] = {
+                "url": webhook_url,
+                "protocol": "hermes-webhook",
+                "auth": {"type": "hmac-sha256", "secret": webhook_secret or ""},
+            }
+
+        if not token and not transports:
             return None
-        return {
-            "platforms": {
+
+        identity: dict = {
+            "defaults": {
+                "platform": "telegram" if token else ("a2a" if transports else "telegram"),
+                "chat_type": "dm",
+            },
+        }
+        if token:
+            identity["platforms"] = {
                 "telegram": {
                     "bot_token": token,
                     "default_chat_id": chat_id,
                 }
-            },
-            "defaults": {
-                "platform": "telegram",
-                "chat_type": "dm",
-            },
-        }
+            }
+        if transports:
+            identity["transports"] = transports
+        return identity
 
     def _from_explicit_config(self) -> Optional[dict]:
         """Read identity from config.yaml values (last resort before env)."""
@@ -278,20 +304,40 @@ class VaultResolver:
             return None
         token = a2a.get("bot_token", "").strip()
         chat_id = a2a.get("default_chat_id", "").strip()
-        if not token:
+
+        a2a_url = (a2a.get("rpc_url") or a2a.get("url") or "").strip()
+        webhook_url = (a2a.get("webhook_url") or "").strip()
+        webhook_secret = (a2a.get("webhook_secret") or "").strip()
+
+        transports: dict = {}
+        if a2a_url:
+            transports["a2a_rpc"] = {"url": a2a_url, "protocol": "google-a2a"}
+        if webhook_url:
+            transports["hermes_webhook"] = {
+                "url": webhook_url,
+                "protocol": "hermes-webhook",
+                "auth": {"type": "hmac-sha256", "secret": webhook_secret},
+            }
+
+        if not token and not transports:
             return None
-        return {
-            "platforms": {
+
+        identity: dict = {
+            "defaults": {
+                "platform": "telegram" if token else ("a2a" if transports else "telegram"),
+                "chat_type": "dm",
+            },
+        }
+        if token:
+            identity["platforms"] = {
                 "telegram": {
                     "bot_token": token,
                     "default_chat_id": chat_id,
                 }
-            },
-            "defaults": {
-                "platform": "telegram",
-                "chat_type": "dm",
-            },
-        }
+            }
+        if transports:
+            identity["transports"] = transports
+        return identity
 
     def resolve_agent(self, name: str) -> Optional[dict]:
         return resolve_agent(name)

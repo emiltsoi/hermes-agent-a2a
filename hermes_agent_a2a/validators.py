@@ -1,6 +1,6 @@
 """Boot-time health checks for HermesA2A v3.
 
-Plugin refuses to start if identity is invalid, instead of failing silently on first float.
+Plugin refuses to start if identity is invalid, instead of failing silently on first call.
 """
 import logging
 
@@ -15,55 +15,57 @@ class BootValidator:
 
     def validate(self, identity: dict) -> None:
         """Run health checks. Raises RuntimeError on any failure."""
-        self._check_bot_token(identity)
-        self._check_chat_id(identity)
-        # Live-check the token against Telegram /getMe — catches expired/revoked
-        # tokens that the string check above cannot detect. Fail-fast at boot
-        # beats silent degradation on the first A2A float. The method handles
-        # transient API errors internally (logs warning, returns) so a Telegram
-        # outage does not block boot.
-        bot_token = str(identity.get("platforms", {}).get("telegram", {}).get("bot_token", "")).strip()
-        if bot_token and not (bot_token.startswith("${") or "}" in bot_token):
-            self.validate_token_with_telegram(bot_token)
+        self._check_has_transport(identity)
+        self._check_telegram_if_present(identity)
         logger.info("[BootValidator] all checks passed")
 
-    def _check_bot_token(self, identity: dict) -> None:
-        """Verify bot token is present, non-empty, and not an unresolved placeholder."""
-        telegram = identity.get("platforms", {}).get("telegram", {})
-        token = str(telegram.get("bot_token", "")).strip()
+    def _check_has_transport(self, identity: dict) -> None:
+        """Verify the identity has at least one usable A2A transport URL."""
+        a2a_url = identity.get("a2a_url", "")
+        webhook_url = identity.get("webhook_url", "")
+        transports = identity.get("transports", {})
+        a2a_rpc_url = (transports.get("a2a_rpc") or {}).get("url", "")
+        hermes_webhook_url = (transports.get("hermes_webhook") or {}).get("url", "")
+        agent_card_url = (transports.get("agent_card") or {}).get("url", "")
 
-        if not token:
-            raise RuntimeError(
-                "A2A identity error: no valid bot token found in vault or env. "
-                "Set A2A_TELEGRAM_BOT_TOKEN env var or configure bot_token in vault.yaml."
-            )
+        if a2a_url or webhook_url or a2a_rpc_url or hermes_webhook_url or agent_card_url:
+            return
+
+        raise RuntimeError(
+            "A2A identity error: no usable A2A transport URL found. "
+            "Configure transports.a2a_rpc.url, transports.hermes_webhook.url, "
+            "or transports.agent_card.url in the identity vault."
+        )
+
+    def _check_telegram_if_present(self, identity: dict) -> None:
+        """Validate Telegram credentials only when Telegram is configured."""
+        telegram = identity.get("platforms", {}).get("telegram")
+        if not isinstance(telegram, dict):
+            return
+
+        token = str(telegram.get("bot_token", "")).strip()
+        chat_id = telegram.get("default_chat_id")
+
+        if not token and chat_id is None:
+            return
 
         if token.startswith("${") or "}" in token:
             raise RuntimeError(
                 f"A2A identity error: bot_token appears to be an unresolved env var placeholder: {token}"
             )
 
-    def _check_chat_id(self, identity: dict) -> None:
-        """Verify default_chat_id is present and non-null."""
-        telegram = identity.get("platforms", {}).get("telegram", {})
-        chat_id = telegram.get("default_chat_id")
-
-        if not chat_id and chat_id != 0:
+        if not token:
             raise RuntimeError(
-                "A2A identity error: no default_chat_id found. "
-                "Set A2A_OWNER_CHAT_ID env var or configure default_chat_id in vault.yaml."
+                "A2A identity error: default_chat_id is set but bot_token is missing."
             )
 
-        try:
-            parsed = int(chat_id)
-        except (ValueError, TypeError):
+        if chat_id is None or chat_id == 0:
             raise RuntimeError(
-                f"A2A identity error: default_chat_id must be a non-zero integer, got {repr(chat_id)}."
+                "A2A identity error: bot_token is set but default_chat_id is missing or zero."
             )
-        if parsed == 0:
-            raise RuntimeError(
-                f"A2A identity error: default_chat_id must be non-zero, got {repr(chat_id)}."
-            )
+
+        if not (token.startswith("${") or "}" in token):
+            self.validate_token_with_telegram(token)
 
     def validate_token_with_telegram(self, token: str) -> None:
         """Ping Telegram /getMe to verify token is live. Raises on 401."""
@@ -85,7 +87,8 @@ class BootValidator:
                     "Check that the bot token is correct and active."
                 )
             logger.warning(
-                f"[BootValidator] transient Telegram API error ({e.code}) during token "
-                "verification — boot continues. This may indicate rate-limiting or an "
-                "upstream outage. Token will be re-verified on next boot."
+                "[BootValidator] transient Telegram API error (%d) during token "
+                "verification — boot continues. This may indicate rate-limiting or "
+                "an upstream outage. Token will be re-verified on next boot.",
+                e.code,
             )

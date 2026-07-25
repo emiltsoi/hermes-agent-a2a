@@ -14,7 +14,6 @@ from .tool_handlers import (
     handle_run_local_agent_task,
     handle_run_remote_agent_task,
     handle_send_protocol_task,
-    handle_send_session_message,
     handle_help,
     set_runtime_callbacks,
 )
@@ -29,8 +28,8 @@ def _serialize_dict_handler(handler):
     return str or a _multimodal dict.  Our A2A handlers return plain dicts,
     which triggers ``"Tool handler returned unsupported result type: dict"``.
     This wrapper serializes dict returns to json.dumps(str) so they pass the
-    registry contract.  Internal callers (tests, _handle_a2a_metrics_command)
-    call the raw handler directly and still receive dicts.
+    registry contract.  Internal callers call the raw handler directly and still
+    receive dicts.
     """
     def wrapper(*args, **kwargs):
         result = handler(*args, **kwargs)
@@ -89,12 +88,6 @@ def register(registry, ensure_server=None, get_vault_resolver=None) -> None:
         toolset="a2a",
         schema=schemas.A2A_RUN_REMOTE_AGENT_TASK,
         handler=_serialize_dict_handler(_dict_args_handler(handle_run_remote_agent_task)),
-    )
-    registry.register_tool(
-        name=schemas.A2A_TELEGRAM["name"],
-        toolset="a2a",
-        schema=schemas.A2A_TELEGRAM,
-        handler=_serialize_dict_handler(handle_send_session_message),
     )
     registry.register_tool(
         name=schemas.A2A_GET_METRICS["name"],

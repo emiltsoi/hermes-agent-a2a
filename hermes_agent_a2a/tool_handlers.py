@@ -34,7 +34,6 @@ from .a2a_spec.tasks import (
     parse_json_rpc_error,
     parse_task_result,
 )
-from .telegram_float import send
 from .worker_registry import cancel_worker, register_worker, unregister_worker
 from .security import validate_target_url as _validate_target_url
 
@@ -144,69 +143,6 @@ def _derive_hermes_home() -> str:
         )
     
     return hermes_home
-
-
-def _validate_agent_webhook_config(agent_info: dict) -> tuple[bool, str]:
-    """Validate that an agent has required webhook configuration for session relay.
-    
-    Args:
-        agent_info: Agent identity dictionary from vault.
-    
-    Returns:
-        Tuple of (is_valid, error_message).
-    """
-    hermes_webhook = _transport(agent_info, "hermes_webhook")
-    webhook_url = hermes_webhook.get("url", "")
-    webhook_secret = _transport_auth_value(hermes_webhook, "secret")
-    
-    if not webhook_url:
-        return False, "Agent has no hermes_webhook.url configured"
-    
-    if not webhook_secret:
-        return False, "Agent has no hermes_webhook.secret configured - HMAC signature required"
-    
-    return True, ""
-
-
-def _validate_webhook_reachable(webhook_url: str, timeout: int = 5) -> tuple[bool, str]:
-    """Validate that a webhook URL is reachable via HEAD request.
-    
-    SSRF-protected via validate_target_url before any outbound I/O.
-    
-    Args:
-        webhook_url: The webhook URL to check.
-        timeout: Timeout in seconds for the reachability check.
-    
-    Returns:
-        Tuple of (is_reachable, error_message).
-    """
-    try:
-        _validate_target_url(webhook_url, allow_loopback=True)
-    except ValueError as e:
-        return False, f"Webhook URL rejected: {e}"
-    try:
-        import urllib.request
-        req = urllib.request.Request(webhook_url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            # Any 2xx or 3xx response is considered reachable
-            if 200 <= resp.status < 400:
-                return True, ""
-            return False, f"Webhook returned status {resp.status}"
-    except urllib.error.HTTPError as exc:
-        # Some servers don't support HEAD, try GET instead
-        if exc.code == 405:
-            try:
-                req = urllib.request.Request(webhook_url, method="GET")
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    if 200 <= resp.status < 400:
-                        return True, ""
-                    return False, f"Webhook returned status {resp.status}"
-            except Exception as e:
-                return False, f"Webhook unreachable: {e}"
-        return False, f"Webhook returned status {exc.code}"
-    except Exception as exc:
-        return False, f"Webhook unreachable: {exc}"
-
 
 
 def _resolve_rpc_target(name: str) -> tuple[dict | None, str, dict, bool, dict | None]:
@@ -319,14 +255,12 @@ def handle_help(topic: str = "overview", **kwargs) -> dict:
         "a2a_cancel_protocol_task": "Cancel a protocol task with CancelTask.",
         "a2a_run_local_agent_task": "Run a target Hermes profile as an ephemeral worker on the caller machine.",
         "a2a_run_remote_agent_task": "Ask a target Hermes agent to spawn an ephemeral worker on the target machine.",
-        "a2a_send_session_message": "Send through a target Hermes gateway into its configured platform/session context.",
         "a2a_get_metrics": "Get current A2A plugin metrics (uptime, webhook stats, task counts, queue depth).",
     }
     guidance = {
         "overview": [
             "Use a2a_send_protocol_task for the actual A2A protocol path.",
             "Use a2a_run_local_agent_task or a2a_run_remote_agent_task for Hermes-specific ephemeral workers.",
-            "Use a2a_send_session_message when you need the target gateway/session context rather than protocol task state.",
             "Use a2a_discover before protocol calls, especially for external agents.",
         ],
         "protocol": [
@@ -339,14 +273,6 @@ def handle_help(topic: str = "overview", **kwargs) -> dict:
             "a2a_run_local_agent_task runs the target profile locally and requires that profile on the caller filesystem.",
             "a2a_run_remote_agent_task calls the target A2A server and asks it to run a target-side worker.",
             "Worker tools are Hermes-specific and are not generic external A2A protocol operations.",
-        ],
-        "sessions": [
-            "a2a_send_session_message sends one-way through the Hermes gateway/session relay.",
-            "The target Hermes profile must configure session/webhook routing in config.yaml so inbound webhook text reaches the intended platform/session.",
-            "Use it for human-visible or platform-routed conversations where config.yaml owns session routing.",
-            "It returns delivery status only; it does not wait for or guarantee a semantic reply.",
-            "It is a Hermes extension to the A2A-shaped task model, not a standard request/response protocol task.",
-            "CTA is 2D: action (do|info) + reply (yes|no). Action: do (take action) | info (log/acknowledge). Reply: yes (expects reply) | no (fire-and-forget).",
         ],
         "external_agents": [
             "Start with a2a_discover(url='https://external-agent.example') to fetch the Agent Card.",
@@ -398,7 +324,6 @@ def handle_help(topic: str = "overview", **kwargs) -> dict:
             "a2a_send_protocol_task(name='yoyo', message='Review this plan')",
             "a2a_run_local_agent_task(name='yoyo', message='Think locally', timeout=300)",
             "a2a_run_remote_agent_task(name='yoyo', message='Think on your own machine', timeout=300)",
-            "a2a_send_session_message(agent='yoyo', message='Please reply in your active session')",
             "a2a_discover(url='https://external-agent.example')",
             "a2a_send_protocol_task(url='https://external-agent.example', message='Hello external A2A', auth_token='...', timeout=30)",
         ],
@@ -1232,200 +1157,8 @@ def handle_cancel_protocol_task(
 
 
 # ----------------------------------------------------------------------
-# Tool: session message
+# Tool: get metrics
 # ----------------------------------------------------------------------
-
-
-def handle_send_session_message(args: dict = None, **kwargs) -> dict:
-    """Send a session-aware message to a Hermes mesh peer.
-
-    Two-part delivery:
-    1. Webhook to target agent's Hermes gateway relay.
-    2. Echo to sender's Telegram DM when configured.
-
-    Routes the message to the target agent's gateway webhook so that the
-    target gateway/config resolves it into the target Telegram session and
-    invokes the target agent. Also echoes the same padded message to the
-    sender's own Telegram DM for operator visibility when sender Telegram
-    credentials are available.
-    Auto-pads [a2a][from:<self>][to:<agent>][id:<uuid>][action:<action>][reply:<reply>] header.
-    Caller passes raw message; tool handles mesh metadata. No response returned.
-
-    Supports two call conventions:
-    - registry.dispatch(name, {key: val})      → args dict is first positional
-    - registry.dispatch(name, {}, key=val)    → kwargs carry the arguments
-    """
-    # Merge args (from positional dict) with kwargs (from **kwargs dispatch).
-    # This covers both registry.dispatch(name, args) and the LLM's
-    # registry.dispatch(name, {}, message=..., agent=...) patterns.
-    merged = dict(args) if args else {}
-    merged.update(kwargs)
-
-    message = merged.get("message", "")
-    agent = merged.get("agent", "")
-    action = merged.get("action", "do")
-    reply = merged.get("reply", "yes")
-    ref = merged.get("ref")
-    caller_id = merged.get("caller_id")
-    task_id = merged.get("task_id")
-    user_task = merged.get("user_task")
-
-    if not message:
-        return {"error": "'message' is required"}
-    if not agent:
-        return {"error": "'agent' is required"}
-
-    # Own bot_token is no longer resolved here. The Telegram float path at
-    # the bottom of this function reads env vars (HERMES_TELEGRAM_BOT_TOKEN /
-    # A2A_TELEGRAM_BOT_TOKEN / TELEGRAM_BOT_TOKEN) directly. The vault-resolved
-    # lookup was dead code — the result was assigned and never used.
-    # (MED-04, a2a-review-20260602)
-
-    # Target delivery: route to target gateway webhook. The target gateway's
-    # config.yaml owns target_session/deliver_extra and resolves the message
-    # into the target Telegram session.
-    target_info = _resolve_agent_by_name(agent)
-    if not target_info:
-        # Agent not found - check if it's a /a2a_metrics command for local handling
-        if os.getenv("A2A_METRICS_COMMAND_ENABLED", "false").lower() == "true":
-            stripped_message = message.strip()
-            if stripped_message.startswith("/a2a_metrics"):
-                from .runtime_state import get_runtime_state as get_state
-                metrics = get_state().get_metrics().get_metrics()
-                return {
-                    "state": "completed",
-                    "response": _format_metrics_for_telegram(metrics),
-                    "delivery": "command_response",
-                }
-        return {"error": f"Agent '{agent}' not found in vault registry"}
-
-    # Validate webhook configuration before attempting delivery
-    from .identity import get_raw_agent_identity
-    raw_info = get_raw_agent_identity(agent)
-    is_valid, validation_error = _validate_agent_webhook_config(raw_info)
-    if not is_valid:
-        return {"error": f"Agent '{agent}' webhook configuration invalid: {validation_error}"}
-
-    # Optional webhook reachability check
-    if os.getenv("A2A_WEBHOOK_REACHABILITY_CHECK", "false").lower() == "true":
-        hermes_webhook = _transport(raw_info, "hermes_webhook")
-        target_webhook_url = hermes_webhook.get("url", "") or (raw_info.get("webhook_url", "") if isinstance(raw_info, dict) else "")
-        if target_webhook_url:
-            try:
-                target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=_is_local_fleet_agent(agent))
-            except ValueError as e:
-                return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
-            reachability_timeout = int(os.getenv("A2A_WEBHOOK_REACHABILITY_TIMEOUT", "5"))
-            is_reachable, reachability_error = _validate_webhook_reachable(target_webhook_url, reachability_timeout)
-            if not is_reachable:
-                return {"error": f"Agent '{agent}' webhook unreachable: {reachability_error}"}
-
-    from_agent = os.getenv("A2A_AGENT_NAME", "hermes-agent")
-    task_id = task_id or str(uuid.uuid4())
-    msg_id = task_id
-    hermes = build_hermes_metadata(route="session", execution="gateway_session", delivery="one_way", reply_mode="none")
-    # Session messages are one-way by design. The envelope uses notification/acknowledge at protocol level.
-    # The 2D CTA (action/reply) is semantic guidance for the recipient LLM, embedded in the text header.
-    envelope = build_task_send_payload(
-        task_id=task_id,
-        message=message,
-        sender_name=from_agent,
-        intent="notification",
-        expected_action="acknowledge",
-        hermes=hermes,
-        caller_id=caller_id,
-    )
-    header = f"[a2a][from:{from_agent}][to:{agent}][id:{msg_id}][action:{action}][reply:{reply}]"
-    if ref:
-        header += f"[ref:{ref}]"
-    padded_message = f"{header} {message}"
-
-    # Part 1: Webhook to target agent's gateway relay.
-    hermes_webhook = _transport(raw_info, "hermes_webhook")
-    target_webhook_url = hermes_webhook.get("url", "") or (raw_info.get("webhook_url", "") if isinstance(raw_info, dict) else "")
-    # SSRF check: validate webhook URL before delivery, mirroring the check in _resolve_agent.
-    # Do NOT assume the resolved agent card URL and the webhook URL share the same host.
-    if target_webhook_url:
-        try:
-            allow_loopback = _is_local_fleet_agent(agent) or (raw_info or {}).get("allow_loopback", False)
-            target_webhook_url = _validate_target_url(target_webhook_url, allow_loopback=allow_loopback)
-        except ValueError as e:
-            return {"error": f"Agent '{agent}' webhook URL failed SSRF check: {e}"}
-    import hashlib
-    import hmac
-    delivery_id = None
-    if target_webhook_url:
-        webhook_secret = _transport_auth_value(hermes_webhook, "secret") or (raw_info.get("webhook_secret", "") if isinstance(raw_info, dict) else "")
-        if not webhook_secret:
-            return {"error": "Webhook delivery failed"}
-        body = json.dumps({"text": padded_message}, sort_keys=True)
-        sig = hmac.new(
-            webhook_secret.encode(),
-            body.encode(),
-            hashlib.sha256
-        ).hexdigest()
-        headers = {
-            "Content-Type": "application/json",
-            "X-Hub-Signature-256": f"sha256={sig}",
-        }
-        # Make retry logic configurable via environment variables
-        delivery_retries = int(os.getenv("A2A_WEBHOOK_DELIVERY_RETRIES", "3"))
-        delivery_backoff = float(os.getenv("A2A_WEBHOOK_DELIVERY_BACKOFF", "1.0"))
-        delivery_timeout = int(os.getenv("A2A_WEBHOOK_DELIVERY_TIMEOUT", "10"))
-        
-        import urllib.request
-        import logging
-        _logger = logging.getLogger(__name__)
-        
-        # Get metrics instance for recording
-        from .runtime_state import get_runtime_state as get_state
-        metrics = get_state().get_metrics()
-        
-        for attempt in range(delivery_retries):
-            try:
-                req = urllib.request.Request(
-                    target_webhook_url,
-                    data=body.encode(),
-                    headers=headers,
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=delivery_timeout) as resp:
-                    result = json.loads(resp.read().decode())
-                    delivery_id = result.get("delivery_id", "unknown")
-                metrics.record_webhook_result(success=True)
-                if attempt > 0:
-                    _logger.info("[a2a_send_session_message] Webhook delivery succeeded on attempt %d/%d", attempt + 1, delivery_retries)
-                break
-            except Exception as exc:
-                if attempt < delivery_retries - 1:
-                    backoff = delivery_backoff * (2 ** attempt)
-                    _logger.warning("[a2a_send_session_message] Webhook delivery attempt %d/%d failed: %s, retrying in %.1fs", attempt + 1, delivery_retries, exc, backoff)
-                    time.sleep(backoff)
-                else:
-                    metrics.record_webhook_result(success=False)
-                    _logger.error("[a2a_send_session_message] Webhook delivery failed after %d attempts: %s", delivery_retries, exc)
-                    return {"error": f"Webhook to agent '{agent}' failed after {delivery_retries} attempts: {exc}"}
-    else:
-        return {"error": f"Agent '{agent}' has no webhook_url in vault"}
-
-    # Part 2: Telegram float — extracted to telegram_float.send (Low-08,
-    # a2a-review-20260602). Float is a post-handler side effect; failures
-    # are diagnostic, not blocking. The transport module does not assume
-    # the sender; the handler passes the calling agent's own identity.
-    send(text=padded_message, sender_name=from_agent)
-
-    return {
-        "task_id": task_id,
-        "state": "completed",
-        "status": "delivered",
-        "delivery": "delivered",
-        "reply_expected": reply == "yes",
-        "message_id": delivery_id,
-        "agent": agent,
-        "gateway_delivery": True,
-        "hermes": hermes,
-        "a2a_envelope": envelope,
-    }
 
 
 def handle_get_metrics(args=None, **kwargs) -> dict:
@@ -1437,47 +1170,3 @@ def handle_get_metrics(args=None, **kwargs) -> dict:
     from .runtime_state import get_runtime_state as get_state
 
     return get_state().get_metrics().get_metrics()
-
-
-def _format_metrics_for_telegram(metrics: dict) -> str:
-    """Format metrics for Telegram display."""
-    uptime = metrics.get("uptime_seconds", 0)
-    uptime_hours = int(uptime // 3600)
-    uptime_mins = int((uptime % 3600) // 60)
-    uptime_secs = int(uptime % 60)
-
-    webhook = metrics.get("webhook", {})
-    tasks = metrics.get("tasks", {})
-    queue = metrics.get("queue", {})
-
-    lines = [
-        "📊 A2A Metrics",
-        "",
-        f"⏱️ Uptime: {uptime_hours}h {uptime_mins}m {uptime_secs}s",
-        "",
-        "🔗 Webhook",
-        f"Attempts: {webhook.get('attempts', 0)}",
-        f"✅ Success: {webhook.get('successes', 0)} ({webhook.get('success_rate_percent', 0):.2f}%)",
-        f"❌ Failed: {webhook.get('failures', 0)}",
-        "",
-        "📨 Tasks",
-        f"Received: {tasks.get('received', 0)}",
-        f"Completed: {tasks.get('completed', 0)}",
-        f"Failed: {tasks.get('failed', 0)}",
-        f"Canceled: {tasks.get('canceled', 0)}",
-        "",
-        f"📬 Queue: {queue.get('pending_count', 0)} pending",
-    ]
-    return "\n".join(lines)
-
-
-def _handle_a2a_metrics_command(_raw_args: str) -> str | None:
-    """Telegram slash command handler for /a2a-metrics.
-
-    `_raw_args` is intentionally unused — slash commands may pass args, and
-    the parameter is reserved for a future subset-selection extension. The
-    underscore prefix marks it as intentionally unused per Python convention.
-    (LOW-02, a2a-review-20260602)
-    """
-    metrics = handle_get_metrics()
-    return _format_metrics_for_telegram(metrics)

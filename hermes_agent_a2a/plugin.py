@@ -125,18 +125,7 @@ class HermesAgentA2APlugin:
         tools_module.register(registry, _start_a2a_server, _get_vault_resolver)
         logger.info("[HermesA2A] Phase 3 tools registered")
 
-        # Register /a2a-metrics as a Telegram slash command if env var is set
-        if os.getenv("A2A_METRICS_COMMAND_ENABLED", "false").lower() == "true":
-            from .tool_handlers import _handle_a2a_metrics_command
-            registry.register_command(
-                "a2a-metrics",
-                handler=_handle_a2a_metrics_command,
-                description="Get A2A plugin metrics (uptime, webhook stats, task counts)",
-                args_hint="",
-            )
-            logger.info("[HermesA2A] /a2a-metrics command registered")
-
-        # Boot-strap identity validation — fail fast if bot_token / default_chat_id are missing or unresolved
+        # Boot-strap identity validation — fail fast if A2A transport identity is missing or unresolved
         vault_resolver = _get_vault_resolver()
         identity = vault_resolver.resolve()
         from .validators import BootValidator
