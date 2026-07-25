@@ -1266,6 +1266,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
     action = merged.get("action", "do")
     reply = merged.get("reply", "yes")
     ref = merged.get("ref")
+    caller_id = merged.get("caller_id")
     task_id = merged.get("task_id")
     user_task = merged.get("user_task")
 
@@ -1332,6 +1333,7 @@ def handle_send_session_message(args: dict = None, **kwargs) -> dict:
         intent="notification",
         expected_action="acknowledge",
         hermes=hermes,
+        caller_id=caller_id,
     )
     header = f"[a2a][from:{from_agent}][to:{agent}][id:{msg_id}][action:{action}][reply:{reply}]"
     if ref:

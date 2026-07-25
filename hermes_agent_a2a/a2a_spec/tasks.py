@@ -148,6 +148,7 @@ def build_task_send_payload(
     skill: Optional[str] = None,
     hermes: Optional[dict] = None,
     request_id: Optional[str] = None,
+    caller_id: Optional[str] = None,
 ) -> dict:
     """Build a SendMessage JSON-RPC payload.
 
@@ -164,6 +165,8 @@ def build_task_send_payload(
         metadata["skill"] = skill
     if hermes:
         metadata["hermes"] = hermes
+    if caller_id:
+        metadata["caller_id"] = caller_id
 
     payload = {
         "jsonrpc": "2.0",
