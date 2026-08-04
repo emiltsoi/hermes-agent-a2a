@@ -1,20 +1,23 @@
 # Hermes Agent A2A
 
-> **Status: Active — pending upstream migration**
+> # ⛔ DEPRECATED — 2026-08-04
 >
-> This plugin is the current A2A implementation for the Hermes fleet (7 agents, daily use). It provides standard A2A (discover, call, serve, JSON-RPC, SSE, push notifications) plus fleet session relay (`a2a_send_session_message`).
+> **This plugin is retired. Do not install or use it for new work.**
 >
-> **Planned migration** once [upstream PR #41711](https://github.com/NousResearch/hermes-agent/pull/41711) merges:
+> **Replacement:** Hermes Agent **v0.20.0+** ships **native Google A2A** as the bundled `a2a-platform` plugin (`a2a_discover`, `a2a_call`, `a2a_list`, `a2a_history`, `a2a_orchestrate`) — the same protocol this plugin implemented by hand, now maintained upstream. Enable it via the `a2a:` section of your Hermes config; see [Hermes docs](https://hermes-agent.nousresearch.com/docs).
 >
-> | What | Moves to |
-> |------|----------|
-> | Standard A2A (discover, call, serve) | Upstream Hermes A2A platform adapter |
-> | Fleet session relay (mesh) | [hermes-mesh](https://github.com/emiltsoi/hermes-mesh) |
+> **Fleet mesh (wife-to-wife session relay):** replaced by [hermes-mesh](https://github.com/emiltsoi/hermes-mesh) (`mesh_send` tool). The retired `a2a_send_session_message` has no native equivalent — use `mesh_send(agent=<peer>, action='do'|'info', reply='yes'|'no')`.
 >
-> Until the upstream adapter ships, this plugin remains the canonical A2A path for Hermes. It is actively deployed and maintained. No migration required yet.
+> **Migration:**
+> - Standard A2A (discover/call/serve, JSON-RPC, SSE, push) → native `a2a-platform` (Hermes ≥ 0.20.0)
+> - Fleet session relay → `mesh_send` (hermes-mesh)
+> - Non-Hermes peers (Kore/OpenClaw) → `a2a_send_protocol_task` (loopback-blocked on Hermes; use mesh for fleet-internal)
+>
+> **Support status:** archived. Security fixes land in upstream Hermes, not here. The fleet retired this plugin on 2026-08-04; source remains for reference only.
 
+---
 
-`hermes-agent-a2a` is the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents. It exposes a local A2A server, HMAC request signing, SSE streaming, push notifications, session relay via webhook delivery, and fleet metrics — all Hermes-specific, not fleet-agnostic.
+`hermes-agent-a2a` was the A2A HTTP/JSON-RPC protocol plugin for Hermes fleet agents (2026-05 → 2026-08). It exposed a local A2A server, HMAC request signing, SSE streaming, push notifications, session relay via webhook delivery, and fleet metrics — all Hermes-specific, not fleet-agnostic. Historical documentation below.
 
 ## Capabilities
 
